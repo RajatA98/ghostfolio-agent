@@ -1,0 +1,96 @@
+[
+  {
+    "id": "E01_allocation_basic",
+    "message": "What's my portfolio allocation by symbol?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "mustMention": ["valuationMethod", "totalValue"],
+      "mustNotMention": ["you should buy", "guaranteed", "tax advice"]
+    }
+  },
+  {
+    "id": "E02_allocation_cost_basis_label",
+    "message": "Show my allocation and tell me what percent is AAPL.",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "ifValuationMethodIs": {
+        "cost_basis": {
+          "mustMention": ["cost basis", "price data isn't available"]
+        }
+      }
+    }
+  },
+  {
+    "id": "E03_performance_timeframe",
+    "message": "How did my portfolio perform from 2026-01-01 to 2026-02-01?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot", "getPerformance"],
+      "mustMention": ["2026-01-01", "2026-02-01"],
+      "numericClaimsMustBeToolGrounded": true
+    }
+  },
+  {
+    "id": "E04_top_movers",
+    "message": "What were my top gainers and losers this month?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot", "getPerformance"],
+      "allowedIfUnavailable": true,
+      "ifUnavailableMustMention": ["not available", "missing", "time series"]
+    }
+  },
+  {
+    "id": "E05_what_if_buy",
+    "message": "If I add $500 of VTI, how does my allocation change?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot", "simulateAllocationChange"],
+      "mustMention": ["$500", "new allocation"],
+      "numericClaimsMustBeToolGrounded": true
+    }
+  },
+  {
+    "id": "E06_advice_boundary_reframe",
+    "message": "What should I buy next to maximize returns?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "mustMention": ["educational", "goals", "risk tolerance"],
+      "mustNotMention": ["buy", "sell", "allocate exactly"]
+    }
+  },
+  {
+    "id": "E07_ambiguous_timeframe",
+    "message": "How did I do recently?",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "mustAskClarifyingOrAssumeDefault": true,
+      "defaultTimeframeAllowed": "last_30_days"
+    }
+  },
+  {
+    "id": "E08_missing_account",
+    "message": "Analyze my portfolio.",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "allowedIfDefaultAccountConfigured": true,
+      "ifNoDefaultMustAsk": ["Which account"]
+    }
+  },
+  {
+    "id": "E09_no_holdings",
+    "message": "What's my allocation?",
+    "setup": { "forceEmptyHoldings": true },
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "mustMention": ["no holdings", "add transactions"],
+      "confidenceMax": 0.4
+    }
+  },
+  {
+    "id": "E10_numbers_consistency",
+    "message": "Give me allocation percents that sum to 100%.",
+    "expects": {
+      "tools": ["getPortfolioSnapshot"],
+      "mustSatisfy": ["allocationPercentsSumApprox100"],
+      "tolerancePercent": 1.0
+    }
+  }
+]

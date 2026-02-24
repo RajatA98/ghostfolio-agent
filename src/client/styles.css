@@ -1,0 +1,109 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f7f7f8;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.config {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input,
+textarea,
+button {
+  font: inherit;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.messages {
+  min-height: 320px;
+  max-height: 500px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.message {
+  margin-bottom: 10px;
+  display: flex;
+}
+
+.message.user {
+  justify-content: flex-end;
+}
+
+.message.assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 75%;
+  border-radius: 10px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.message.user .bubble {
+  background: #1976d2;
+  color: #fff;
+}
+
+.message.assistant .bubble {
+  background: #eceff1;
+}
+
+.meta {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.inputRow {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+#messageInput {
+  flex: 1;
+}
+
+#sendButton {
+  border: 0;
+  border-radius: 8px;
+  padding: 0 16px;
+  background: #1976d2;
+  color: #fff;
+  cursor: pointer;
+}
