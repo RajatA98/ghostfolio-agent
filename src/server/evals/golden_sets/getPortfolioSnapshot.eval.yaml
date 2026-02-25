@@ -1,0 +1,186 @@
+# Golden Set — getPortfolioSnapshot
+# 15 deterministic, binary pass/fail cases. Zero LLM judge cost.
+
+# ─── HAPPY PATH ─────────────────────────────────────────────────────
+
+- id: "gs-snap-001"
+  query: "What's my portfolio allocation by symbol?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+    - "no information"
+
+- id: "gs-snap-002"
+  query: "What is my total portfolio value?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "value"
+  must_not_contain:
+    - "I don't know"
+    - "no data"
+
+- id: "gs-snap-003"
+  query: "Show me my allocation by asset class."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-snap-004"
+  query: "Give me allocation percents that sum to 100%."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "%"
+  must_not_contain:
+    - "I can't"
+  must_satisfy:
+    - allocationPercentsSumApprox100
+
+- id: "gs-snap-005"
+  query: "Show my allocation and tell me what percent is AAPL."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "I don't know"
+  if_valuation_method:
+    cost_basis:
+      must_contain:
+        - "cost basis"
+
+- id: "gs-snap-006"
+  query: "How many different stocks do I own?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't determine"
+    - "not supported"
+
+- id: "gs-snap-007"
+  query: "What is my largest holding by value?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+    - "not supported"
+
+- id: "gs-snap-008"
+  query: "What currency is my portfolio denominated in?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+
+# ─── EDGE CASES ─────────────────────────────────────────────────────
+
+- id: "gs-snap-009"
+  query: "What's my allocation?"
+  setup:
+    forceEmptyHoldings: true
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "no holdings"
+  must_not_contain:
+    - "your top holding"
+    - "largest position"
+  max_confidence: 0.4
+
+- id: "gs-snap-010"
+  query: "Show my portfolio allocation for the year to date range."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-snap-011"
+  query: "What are my holdings worth?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "cost basis"
+    - "price data"
+
+- id: "gs-snap-012"
+  query: "What percentage of my portfolio is in equities vs bonds?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't determine"
+    - "not supported"
+
+- id: "gs-snap-013"
+  query: "Show my portfolio snapshot for the last year."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+# ─── NEGATIVE VALIDATION ────────────────────────────────────────────
+
+- id: "gs-snap-014"
+  query: "What is my allocation between AAPL and VTI?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-snap-015"
+  query: "Do I own any Bitcoin?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't access"
+    - "not supported"

@@ -1,0 +1,87 @@
+# Labeled Scenarios — Multi-Step
+# Tests queries requiring multiple tools in combination.
+
+- id: "sc-multi-001"
+  query: "Show my current allocation and simulate selling 50% of my largest holding."
+  category: multi_tool
+  subcategory: snapshot_and_simulation
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-multi-002"
+  query: "Compare my YTD performance with my current allocation breakdown."
+  category: multi_tool
+  subcategory: snapshot_and_performance
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPortfolioSnapshot
+    - getPerformance
+  must_contain:
+    - "allocation"
+    - "performance"
+  must_not_contain:
+    - "I don't know"
+
+- id: "sc-multi-003"
+  query: "If I buy $1000 of VTI, what does the new allocation look like? Also show me how I performed this month."
+  category: multi_tool
+  subcategory: simulation_and_performance
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+    - getPerformance
+  expected_sources:
+    - simulateAllocationChange
+    - getPerformance
+  must_contain:
+    - "VTI"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-multi-004"
+  query: "What's my total portfolio value, what's my YTD return, and what would happen if I added $2000 in BND?"
+  category: multi_tool
+  subcategory: all_tools
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+    - getPerformance
+    - simulateAllocationChange
+  must_contain:
+    - "BND"
+    - "value"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-multi-005"
+  query: "Show my allocation and performance side by side for the last year."
+  category: multi_tool
+  subcategory: snapshot_and_performance
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPortfolioSnapshot
+    - getPerformance
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"

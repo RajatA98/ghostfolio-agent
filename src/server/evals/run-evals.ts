@@ -57,6 +57,12 @@ interface EvalCase {
   allow_unavailable?: boolean;
   if_unavailable_must_contain?: string[];
   if_valuation_method?: Record<string, { must_contain?: string[] }>;
+
+  // Labeled scenario metadata (ignored in checks, used for reporting)
+  category?: string;
+  subcategory?: string;
+  difficulty?: string;
+  tags?: string[];
 }
 
 interface AllocationRow {
@@ -217,6 +223,19 @@ function checkAllocationSum(data?: AgentResponse['data']): CheckResult {
   };
 }
 
+// ─── Retry helpers ──────────────────────────────────────────────────
+
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 5_000; // 5s, 10s, 20s exponential backoff
+
+function isRetryableError(answer: string): boolean {
+  return answer.includes('overloaded_error') || answer.includes('529');
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ─── Run a Single Case ──────────────────────────────────────────────
 
 async function runCase(
@@ -225,122 +244,204 @@ async function runCase(
   evalCase: EvalCase
 ): Promise<CaseResult> {
   const url = `${baseUrl.replace(/\/$/, '')}/api/chat`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${jwt}`
-    },
-    body: JSON.stringify({ message: evalCase.query })
-  });
 
-  if (!res.ok) {
-    const text = await res.text();
-    return {
-      id: evalCase.id,
-      passed: false,
-      checks: [
-        {
-          check: 'http',
-          passed: false,
-          detail: `✗ HTTP ${res.status}: ${text.slice(0, 200)}`
-        }
-      ],
-      actual: null
-    };
-  }
-
-  const response = (await res.json()) as AgentResponse;
-  const { answer, toolTrace, confidence, data } = response;
-  const checks: CheckResult[] = [];
-
-  // 1. Tool selection
-  checks.push(...checkToolSelection(evalCase.expected_tools, toolTrace));
-
-  // 2. Source citation
-  checks.push(...checkSourceCitation(evalCase.expected_sources, toolTrace));
-
-  // 3. Content validation
-  checks.push(...checkContentValidation(evalCase.must_contain, answer));
-
-  // 4. Negative validation
-  checks.push(...checkNegativeValidation(evalCase.must_not_contain, answer));
-
-  // ─── Extended checks ─────────────────────────────────────────────
-
-  // Confidence ceiling (e.g. empty portfolio should have low confidence)
-  if (typeof evalCase.max_confidence === 'number') {
-    const ok = confidence <= evalCase.max_confidence;
-    checks.push({
-      check: 'negative_validation',
-      passed: ok,
-      detail: ok
-        ? `✓ confidence ${confidence} <= ${evalCase.max_confidence}`
-        : `✗ confidence ${confidence} > ${evalCase.max_confidence} — agent too confident`
-    });
-  }
-
-  // Structural validators (mustSatisfy)
-  if (evalCase.must_satisfy?.length) {
-    for (const name of evalCase.must_satisfy) {
-      if (name === 'allocationPercentsSumApprox100') {
-        checks.push(checkAllocationSum(data));
-      }
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`      ⏳ Retry ${attempt}/${MAX_RETRIES} for ${evalCase.id} after ${delayMs / 1000}s…`);
+      await sleep(delayMs);
     }
-  }
 
-  // Valuation method conditional (source citation refinement)
-  if (evalCase.if_valuation_method && data?.valuationMethod) {
-    const branch = evalCase.if_valuation_method[data.valuationMethod];
-    if (branch?.must_contain?.length) {
-      checks.push(
-        ...checkContentValidation(branch.must_contain, answer).map((c) => ({
-          ...c,
-          check: 'source_citation' as const,
-          detail: c.detail.replace('content_validation', `source_citation (valuationMethod=${data.valuationMethod})`)
-        }))
-      );
-    }
-  }
-
-  // Unavailable data fallback (deterministic: same toolTrace + answer → same result)
-  if (
-    evalCase.allow_unavailable &&
-    evalCase.if_unavailable_must_contain?.length
-  ) {
-    const toolsFailed = evalCase.expected_tools.some((t) => {
-      const trace = toolTrace.find((tr) => tr.tool === t);
-      return !trace || !trace.ok;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${jwt}`
+      },
+      body: JSON.stringify({ message: evalCase.query })
     });
-    if (toolsFailed) {
-      const normalizedAnswer = normalizeForAssert(answer);
-      const hasPhrase = evalCase.if_unavailable_must_contain.some((p) =>
-        normalizedAnswer.includes(normalizeForAssert(p))
-      );
+
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 529 && attempt < MAX_RETRIES) continue;
+      return {
+        id: evalCase.id,
+        passed: false,
+        checks: [
+          {
+            check: 'http',
+            passed: false,
+            detail: `✗ HTTP ${res.status}: ${text.slice(0, 200)}`
+          }
+        ],
+        actual: null
+      };
+    }
+
+    const response = (await res.json()) as AgentResponse;
+
+    // Retry if the agent caught a 529 from the upstream LLM API
+    if (isRetryableError(response.answer) && attempt < MAX_RETRIES) continue;
+
+    const { answer, toolTrace, confidence, data } = response;
+    const checks: CheckResult[] = [];
+
+    // 1. Tool selection
+    checks.push(...checkToolSelection(evalCase.expected_tools, toolTrace));
+
+    // 2. Source citation
+    checks.push(...checkSourceCitation(evalCase.expected_sources, toolTrace));
+
+    // 3. Content validation
+    checks.push(...checkContentValidation(evalCase.must_contain, answer));
+
+    // 4. Negative validation
+    checks.push(...checkNegativeValidation(evalCase.must_not_contain, answer));
+
+    // ─── Extended checks ─────────────────────────────────────────────
+
+    // Confidence ceiling (e.g. empty portfolio should have low confidence)
+    if (typeof evalCase.max_confidence === 'number') {
+      const ok = confidence <= evalCase.max_confidence;
       checks.push({
-        check: 'content_validation',
-        passed: hasPhrase,
-        detail: hasPhrase
-          ? `✓ data unavailable and answer explains why`
-          : `✗ data unavailable but answer doesn't mention: ${evalCase.if_unavailable_must_contain.join(', ')}`
+        check: 'negative_validation',
+        passed: ok,
+        detail: ok
+          ? `✓ confidence ${confidence} <= ${evalCase.max_confidence}`
+          : `✗ confidence ${confidence} > ${evalCase.max_confidence} — agent too confident`
       });
     }
+
+    // Structural validators (mustSatisfy)
+    if (evalCase.must_satisfy?.length) {
+      for (const name of evalCase.must_satisfy) {
+        if (name === 'allocationPercentsSumApprox100') {
+          checks.push(checkAllocationSum(data));
+        }
+      }
+    }
+
+    // Valuation method conditional (source citation refinement)
+    if (evalCase.if_valuation_method && data?.valuationMethod) {
+      const branch = evalCase.if_valuation_method[data.valuationMethod];
+      if (branch?.must_contain?.length) {
+        checks.push(
+          ...checkContentValidation(branch.must_contain, answer).map((c) => ({
+            ...c,
+            check: 'source_citation' as const,
+            detail: c.detail.replace('content_validation', `source_citation (valuationMethod=${data.valuationMethod})`)
+          }))
+        );
+      }
+    }
+
+    // Unavailable data fallback (deterministic: same toolTrace + answer → same result)
+    if (
+      evalCase.allow_unavailable &&
+      evalCase.if_unavailable_must_contain?.length
+    ) {
+      const toolsFailed = evalCase.expected_tools.some((t) => {
+        const trace = toolTrace.find((tr) => tr.tool === t);
+        return !trace || !trace.ok;
+      });
+      if (toolsFailed) {
+        const normalizedAnswer = normalizeForAssert(answer);
+        const hasPhrase = evalCase.if_unavailable_must_contain.some((p) =>
+          normalizedAnswer.includes(normalizeForAssert(p))
+        );
+        checks.push({
+          check: 'content_validation',
+          passed: hasPhrase,
+          detail: hasPhrase
+            ? `✓ data unavailable and answer explains why`
+            : `✗ data unavailable but answer doesn't mention: ${evalCase.if_unavailable_must_contain.join(', ')}`
+        });
+      }
+    }
+
+    const passed = checks.every((c) => c.passed);
+    const snippet =
+      answer.length > 140 ? answer.slice(0, 140).trim() + '…' : answer.trim();
+    const actual: ActualResponse = {
+      tools: toolTrace.map((t) => t.tool),
+      confidence,
+      answerSnippet: snippet.replace(/\s+/g, ' ').replace(/"/g, "'")
+    };
+    return { id: evalCase.id, passed, checks, actual };
   }
 
-  const passed = checks.every((c) => c.passed);
-  const snippet =
-    answer.length > 140 ? answer.slice(0, 140).trim() + '…' : answer.trim();
-  const actual: ActualResponse = {
-    tools: toolTrace.map((t) => t.tool),
-    confidence,
-    answerSnippet: snippet.replace(/\s+/g, ' ').replace(/"/g, "'")
+  // All retries exhausted — return failure
+  return {
+    id: evalCase.id,
+    passed: false,
+    checks: [
+      {
+        check: 'http',
+        passed: false,
+        detail: `✗ All ${MAX_RETRIES} retries exhausted (upstream LLM overloaded)`
+      }
+    ],
+    actual: null
   };
-  return { id: evalCase.id, passed, checks, actual };
+}
+
+// ─── File Loading Helpers ─────────────────────────────────────────
+
+function loadYamlCases(filePath: string): EvalCase[] {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  return (yaml.load(raw) as EvalCase[]) || [];
+}
+
+function loadCasesFromDir(dirPath: string): { cases: EvalCase[]; files: string[] } {
+  if (!fs.existsSync(dirPath)) return { cases: [], files: [] };
+  const files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.eval.yaml')).sort();
+  const cases: EvalCase[] = [];
+  for (const file of files) {
+    cases.push(...loadYamlCases(path.join(dirPath, file)));
+  }
+  return { cases, files };
+}
+
+// ─── Per-Tool Reporting ──────────────────────────────────────────
+
+interface ToolStats {
+  passed: number;
+  failed: number;
+  total: number;
+}
+
+function printPerToolSummary(
+  cases: EvalCase[],
+  results: CaseResult[]
+): void {
+  const toolStats = new Map<string, ToolStats>();
+  for (let i = 0; i < cases.length; i++) {
+    const evalCase = cases[i];
+    const result = results[i];
+    for (const tool of evalCase.expected_tools) {
+      if (!toolStats.has(tool)) {
+        toolStats.set(tool, { passed: 0, failed: 0, total: 0 });
+      }
+      const stats = toolStats.get(tool)!;
+      stats.total++;
+      if (result.passed) stats.passed++;
+      else stats.failed++;
+    }
+  }
+
+  if (toolStats.size > 0) {
+    console.log(`\n${DIM}Per-tool pass rate:${RESET}`);
+    for (const [tool, stats] of Array.from(toolStats.entries()).sort()) {
+      const rate = stats.total > 0 ? ((stats.passed / stats.total) * 100).toFixed(1) : '0.0';
+      const color = stats.failed > 0 ? RED : GREEN;
+      console.log(`  ${color}${tool}${RESET}: ${stats.passed}/${stats.total} (${rate}%)`);
+    }
+  }
 }
 
 // ─── Main ───────────────────────────────────────────────────────────
 
-type EvalSet = 'golden' | 'scenarios';
+type EvalSet = 'golden' | 'scenarios' | 'all';
 
 function parseEvalSetArg(): EvalSet {
   const setArg = process.argv.find((arg) => arg.startsWith('--set='));
@@ -348,21 +449,57 @@ function parseEvalSetArg(): EvalSet {
   const setIndex = process.argv.indexOf('--set');
   const setFromNext = setIndex >= 0 ? process.argv[setIndex + 1] : undefined;
   const selected = (setFromEquals ?? setFromNext ?? 'golden').toLowerCase();
-  return selected === 'scenarios' ? 'scenarios' : 'golden';
+  if (selected === 'scenarios') return 'scenarios';
+  if (selected === 'all') return 'all';
+  return 'golden';
 }
 
 async function runEvalSet(): Promise<void> {
   const set = parseEvalSetArg();
-  const isGolden = set === 'golden';
-  const setPath = path.join(
-    __dirname,
-    isGolden ? 'golden-set.yaml' : 'scenario-set.yaml'
-  );
-  const raw = fs.readFileSync(setPath, 'utf-8');
-  const cases = yaml.load(raw) as EvalCase[];
-  const setLabel = isGolden ? 'Golden Set' : 'Scenario Set';
 
-  console.log(`\n🏆 ${setLabel}: ${cases.length} cases loaded\n`);
+  // Load cases based on set selection
+  let goldenCases: EvalCase[] = [];
+  let scenarioCases: EvalCase[] = [];
+
+  if (set === 'golden' || set === 'all') {
+    // Load from golden_sets/ directory first, then fall back to golden-set.yaml
+    const goldenDir = path.join(__dirname, 'golden_sets');
+    const { cases: dirCases } = loadCasesFromDir(goldenDir);
+    if (dirCases.length > 0) {
+      goldenCases = dirCases;
+    } else {
+      const legacyPath = path.join(__dirname, 'golden-set.yaml');
+      if (fs.existsSync(legacyPath)) {
+        goldenCases = loadYamlCases(legacyPath);
+      }
+    }
+  }
+
+  if (set === 'scenarios' || set === 'all') {
+    // Load from scenario_sets/ directory first, then fall back to scenario-set.yaml
+    const scenarioDir = path.join(__dirname, 'scenario_sets');
+    const { cases: dirCases } = loadCasesFromDir(scenarioDir);
+    if (dirCases.length > 0) {
+      scenarioCases = dirCases;
+    } else {
+      const legacyPath = path.join(__dirname, 'scenario-set.yaml');
+      if (fs.existsSync(legacyPath)) {
+        scenarioCases = loadYamlCases(legacyPath);
+      }
+    }
+  }
+
+  const allCases = [...goldenCases, ...scenarioCases];
+  const setLabel =
+    set === 'golden' ? 'Golden Set' :
+    set === 'scenarios' ? 'Scenario Set' :
+    'All Evals';
+
+  console.log(`\n🏆 ${setLabel}: ${allCases.length} cases loaded`);
+  if (set === 'all') {
+    console.log(`   (${goldenCases.length} golden + ${scenarioCases.length} scenarios)`);
+  }
+  console.log('');
 
   const baseUrl = process.env.EVAL_BASE_URL;
   const jwt =
@@ -380,7 +517,7 @@ async function runEvalSet(): Promise<void> {
     );
 
     console.log('Cases that would run:');
-    for (const c of cases) {
+    for (const c of allCases) {
       console.log(`  ${c.id}: "${c.query}"`);
     }
     return;
@@ -395,9 +532,11 @@ async function runEvalSet(): Promise<void> {
   let passed = 0;
   let failed = 0;
   const failures: CaseResult[] = [];
+  const allResults: CaseResult[] = [];
 
-  for (const evalCase of cases) {
+  for (const evalCase of allCases) {
     const result = await runCase(baseUrl, jwt, evalCase);
+    allResults.push(result);
     const expectedParts: string[] = [];
     expectedParts.push(`tools: [${evalCase.expected_tools.join(', ')}]`);
     if (evalCase.must_contain.length) {
@@ -436,8 +575,11 @@ async function runEvalSet(): Promise<void> {
 
   console.log(`\n${'─'.repeat(50)}`);
   console.log(
-    `${setLabel}: ${GREEN}${passed} passed${RESET}, ${failed > 0 ? RED : ''}${failed} failed${RESET}${failed > 0 ? RESET : ''} out of ${cases.length}`
+    `${setLabel}: ${GREEN}${passed} passed${RESET}, ${failed > 0 ? RED : ''}${failed} failed${RESET}${failed > 0 ? RESET : ''} out of ${allCases.length}`
   );
+
+  // Per-tool pass rate
+  printPerToolSummary(allCases, allResults);
 
   if (failures.length > 0) {
     console.log(`\n${RED}Failed cases:${RESET}`);
@@ -450,7 +592,11 @@ async function runEvalSet(): Promise<void> {
 
   console.log('');
 
-  if (isGolden && failed > 0) {
+  // Exit 1 if golden set has failures (CI-friendly)
+  const goldenFailCount = failures.filter((f) =>
+    goldenCases.some((gc) => gc.id === f.id)
+  ).length;
+  if ((set === 'golden' || set === 'all') && goldenFailCount > 0) {
     process.exit(1);
   }
 }

@@ -13,7 +13,8 @@
     "test": "jest --runInBand",
     "evals": "tsx src/server/evals/run-evals.ts --set golden",
     "evals:golden": "tsx src/server/evals/run-evals.ts --set golden",
-    "evals:scenarios": "tsx src/server/evals/run-evals.ts --set scenarios"
+    "evals:scenarios": "tsx src/server/evals/run-evals.ts --set scenarios",
+    "evals:all": "tsx src/server/evals/run-evals.ts --set all"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

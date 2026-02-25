@@ -382,7 +382,19 @@ export class AgentService {
       'vti',
       'msft',
       'bnd',
-      'tax'
+      'tax',
+      'return',
+      'money',
+      'made',
+      'lost',
+      'month-to-date',
+      'price',
+      'stock',
+      'share',
+      'bitcoin',
+      'crypto',
+      'equit',
+      'bond'
     ];
     return keywords.some((k) => lowerMessage.includes(k));
   }
@@ -396,7 +408,11 @@ export class AgentService {
       lowerMessage.includes('ytd') ||
       lowerMessage.includes('recently') ||
       lowerMessage.includes('how did i do') ||
-      lowerMessage.includes('this month')
+      lowerMessage.includes('this month') ||
+      lowerMessage.includes('month-to-date') ||
+      lowerMessage.includes('returns') ||
+      lowerMessage.includes('made or lost') ||
+      lowerMessage.includes('how did my portfolio perform')
     );
   }
 
