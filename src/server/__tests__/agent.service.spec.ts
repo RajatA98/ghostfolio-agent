@@ -158,4 +158,104 @@ describe('AgentService', () => {
     expect(result.toolTrace[0].tool).toBe('getPerformance');
     expect(mockFetch.mock.calls[0][0]).toContain('/api/v2/portfolio/performance');
   });
+
+  it('returns synthesized answer and data when tools succeed', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tool_1',
+          name: 'getPortfolioSnapshot',
+          input: { dateRange: 'max' }
+        }
+      ],
+      stop_reason: 'tool_use'
+    });
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: 'text',
+          text: 'Your portfolio is 100% in AAPL, total value $1,855.'
+        }
+      ],
+      stop_reason: 'end_turn'
+    });
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        hasErrors: false,
+        holdings: {
+          AAPL: {
+            symbol: 'AAPL',
+            name: 'Apple',
+            currency: 'USD',
+            quantity: 10,
+            marketPrice: 185.5,
+            investment: 1500,
+            valueInBaseCurrency: 1855,
+            assetClass: 'EQUITY'
+          }
+        }
+      })
+    });
+
+    const service = new AgentService();
+    const result = await service.chat(
+      { message: 'Summarize my portfolio' },
+      {
+        userId: 'u1',
+        baseCurrency: 'USD',
+        language: 'en',
+        jwt: 'jwt-token'
+      }
+    );
+
+    expect(result.answer).toContain('portfolio');
+    expect(result.data.valuationMethod).toBeDefined();
+    expect(result.toolTrace[0].ok).toBe(true);
+    expect(result.confidence).toBeGreaterThan(0);
+  });
+
+  it('handles tool execution failure gracefully and returns response', async () => {
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tool_1',
+          name: 'getPortfolioSnapshot',
+          input: { dateRange: 'max' }
+        }
+      ],
+      stop_reason: 'tool_use'
+    });
+    mockCreate.mockResolvedValueOnce({
+      content: [
+        {
+          type: 'text',
+          text: 'I was unable to load your portfolio due to a temporary error. Please try again.'
+        }
+      ],
+      stop_reason: 'end_turn'
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    const service = new AgentService();
+    const result = await service.chat(
+      { message: 'Show my allocation' },
+      {
+        userId: 'u1',
+        baseCurrency: 'USD',
+        language: 'en',
+        jwt: 'jwt-token'
+      }
+    );
+
+    expect(result.toolTrace).toHaveLength(1);
+    expect(result.toolTrace[0].ok).toBe(false);
+    expect(result.toolTrace[0].error).toBeDefined();
+    expect(result.answer).toBeDefined();
+    expect(result.confidence).toBeLessThanOrEqual(1);
+  });
 });

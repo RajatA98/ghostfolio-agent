@@ -2,6 +2,8 @@ import 'dotenv/config';
 
 import cors from 'cors';
 import express from 'express';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 import { agentConfig } from './agent.config';
 import { AgentService } from './agent.service';
@@ -9,6 +11,30 @@ import { AgentChatRequest } from './agent.types';
 
 const app = express();
 const agentService = new AgentService();
+
+// In-memory JWT cache. Populated at startup from GHOSTFOLIO_ACCESS_TOKEN or GHOSTFOLIO_JWT.
+let cachedJwt: string = agentConfig.ghostfolioJwt;
+
+async function exchangeAccessToken(accessToken: string): Promise<string> {
+  const baseUrl = agentConfig.ghostfolioApiUrl.replace(/\/$/, '');
+  const authUrl = `${baseUrl}/api/v1/auth/anonymous`;
+
+  const authRes = await fetch(authUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accessToken })
+  });
+
+  if (!authRes.ok) {
+    const text = await authRes.text();
+    throw new Error(`Ghostfolio auth failed: ${authRes.status} ${text}`);
+  }
+
+  const data = (await authRes.json()) as { authToken?: string };
+  const authToken = typeof data?.authToken === 'string' ? data.authToken : '';
+  if (!authToken) throw new Error('Ghostfolio did not return an auth token');
+  return authToken;
+}
 
 app.use(
   cors({
@@ -18,18 +44,70 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, authenticated: !!cachedJwt });
+});
+
+app.get('/api/auth/status', (_req, res) => {
+  res.json({ authenticated: !!cachedJwt });
+});
+
+// Exchange Ghostfolio access token or JWT — called from the UI when the server has no cached JWT.
+app.post('/api/auth/ghostfolio', async (req, res) => {
+  try {
+    const body = req.body as { accessToken?: string };
+    const input = typeof body?.accessToken === 'string' ? body.accessToken.trim() : '';
+
+    if (!input) {
+      res.status(400).json({ error: 'accessToken is required' });
+      return;
+    }
+
+    // If the input itself looks like a JWT, cache and return it directly.
+    const isJwt = input.split('.').length === 3 && input.length > 50;
+    if (isJwt) {
+      cachedJwt = input;
+      res.json({ authToken: input });
+      return;
+    }
+
+    let authToken: string;
+    try {
+      authToken = await exchangeAccessToken(input);
+    } catch (fetchError) {
+      const err = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      const reachable = err.includes('fetch failed') || err.includes('ECONNREFUSED');
+      res.status(503).json({
+        error: reachable
+          ? `Cannot reach Ghostfolio at ${agentConfig.ghostfolioApiUrl}. Is it running? Check GHOSTFOLIO_API_URL in .env.`
+          : err
+      });
+      return;
+    }
+
+    cachedJwt = authToken;
+    res.json({ authToken });
+  } catch (error) {
+    res.status(500).json({
+      error: `Auth request failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    });
+  }
 });
 
 app.post('/api/chat', async (req, res) => {
   try {
     const authHeader = req.headers.authorization ?? '';
-    const jwt = authHeader.startsWith('Bearer ')
+    const jwtFromHeader = authHeader.startsWith('Bearer ')
       ? authHeader.slice('Bearer '.length).trim()
       : '';
+    const jwt = jwtFromHeader || cachedJwt;
 
     if (!jwt) {
-      res.status(401).json({ error: 'Missing Authorization Bearer token' });
+      res.status(401).json({
+        error:
+          'Not authenticated. Set GHOSTFOLIO_ACCESS_TOKEN or GHOSTFOLIO_JWT in .env, or connect via the UI.'
+      });
       return;
     }
 
@@ -56,7 +134,46 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.listen(agentConfig.port, () => {
+const clientDistPath = path.resolve(__dirname, '../client');
+const clientIndexPath = path.join(clientDistPath, 'index.html');
+const hasBuiltClient = existsSync(clientIndexPath);
+
+if (hasBuiltClient) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/') || req.path === '/health') {
+      next();
+      return;
+    }
+    res.sendFile(clientIndexPath);
+  });
+}
+
+async function start(): Promise<void> {
+  // Auto-exchange GHOSTFOLIO_ACCESS_TOKEN for JWT at startup if GHOSTFOLIO_JWT is not set.
+  if (!cachedJwt && agentConfig.ghostfolioAccessToken) {
+    try {
+      // eslint-disable-next-line no-console
+      console.log('Exchanging GHOSTFOLIO_ACCESS_TOKEN for JWT…');
+      cachedJwt = await exchangeAccessToken(agentConfig.ghostfolioAccessToken);
+      // eslint-disable-next-line no-console
+      console.log('Ghostfolio JWT obtained. UI auth step not required.');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`Could not auto-exchange access token: ${err instanceof Error ? err.message : err}`);
+      // eslint-disable-next-line no-console
+      console.warn('Users will need to connect manually in the UI.');
+    }
+  }
+
+  app.listen(agentConfig.port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`Ghostfolio Agent listening on http://localhost:${agentConfig.port}`);
+  });
+}
+
+start().catch((err) => {
   // eslint-disable-next-line no-console
-  console.log(`Ghostfolio Agent listening on http://localhost:${agentConfig.port}`);
+  console.error('Failed to start agent:', err);
+  process.exit(1);
 });
