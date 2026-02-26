@@ -41,6 +41,13 @@ const RESET = '\x1b[0m';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
+interface MarketModeOverrides {
+  expected_tools?: string[];
+  expected_sources?: string[];
+  must_contain?: string[];
+  must_not_contain?: string[];
+}
+
 interface EvalCase {
   id: string;
   query: string;
@@ -57,6 +64,10 @@ interface EvalCase {
   allow_unavailable?: boolean;
   if_unavailable_must_contain?: string[];
   if_valuation_method?: Record<string, { must_contain?: string[] }>;
+
+  // Conditional overrides based on AGENT_ENABLE_MARKET
+  if_market_enabled?: MarketModeOverrides;
+  if_market_disabled?: MarketModeOverrides;
 
   // Labeled scenario metadata (ignored in checks, used for reporting)
   category?: string;
@@ -221,6 +232,27 @@ function checkAllocationSum(data?: AgentResponse['data']): CheckResult {
       ? `✓ allocation percents sum to ${sum.toFixed(2)}% (≈100 ±${ALLOCATION_SUM_TOLERANCE_PERCENT}%)`
       : `✗ allocation percents sum to ${sum.toFixed(2)}% — expected 100 ±${ALLOCATION_SUM_TOLERANCE_PERCENT}%`
   };
+}
+
+// ─── Market Mode Resolution ─────────────────────────────────────────
+
+function resolveMarketMode(cases: EvalCase[]): EvalCase[] {
+  const marketEnabled = process.env.AGENT_ENABLE_MARKET === 'true';
+  const modeLabel = marketEnabled ? 'enabled' : 'disabled';
+  console.log(`  Market mode: ${modeLabel} (AGENT_ENABLE_MARKET=${process.env.AGENT_ENABLE_MARKET ?? 'unset'})\n`);
+
+  return cases.map((c) => {
+    const overrides = marketEnabled ? c.if_market_enabled : c.if_market_disabled;
+    if (!overrides) return c;
+
+    return {
+      ...c,
+      expected_tools: overrides.expected_tools ?? c.expected_tools,
+      expected_sources: overrides.expected_sources ?? c.expected_sources,
+      must_contain: overrides.must_contain ?? c.must_contain,
+      must_not_contain: overrides.must_not_contain ?? c.must_not_contain
+    };
+  });
 }
 
 // ─── Retry helpers ──────────────────────────────────────────────────
@@ -489,7 +521,7 @@ async function runEvalSet(): Promise<void> {
     }
   }
 
-  const allCases = [...goldenCases, ...scenarioCases];
+  const allCases = resolveMarketMode([...goldenCases, ...scenarioCases]);
   const setLabel =
     set === 'golden' ? 'Golden Set' :
     set === 'scenarios' ? 'Scenario Set' :

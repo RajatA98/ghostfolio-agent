@@ -8,11 +8,17 @@ import path from 'node:path';
 import { agentConfig } from './agent.config';
 import { AgentService } from './agent.service';
 import { AgentChatRequest } from './agent.types';
+import { AuthenticatedRequest, requireAuth } from './middleware/auth';
+import { GhostfolioUserService } from './services/ghostfolio-user.service';
+import { GhostfolioAuthService } from './services/ghostfolio-auth.service';
+import { PlaidService } from './services/plaid.service';
 
 const app = express();
 const agentService = new AgentService();
+const ghostfolioUserService = new GhostfolioUserService();
+const ghostfolioAuthService = new GhostfolioAuthService();
 
-// In-memory JWT cache. Populated at startup from GHOSTFOLIO_ACCESS_TOKEN or GHOSTFOLIO_JWT.
+// Legacy in-memory JWT cache for non-Supabase mode (backward compat).
 let cachedJwt: string = agentConfig.ghostfolioJwt;
 
 async function exchangeAccessToken(accessToken: string): Promise<string> {
@@ -52,6 +58,7 @@ app.get('/api/auth/status', (_req, res) => {
 });
 
 // Exchange Ghostfolio access token or JWT — called from the UI when the server has no cached JWT.
+// This is the legacy auth flow (non-Supabase). Kept for backward compatibility.
 app.post('/api/auth/ghostfolio', async (req, res) => {
   try {
     const body = req.body as { accessToken?: string };
@@ -97,11 +104,29 @@ app.post('/api/auth/ghostfolio', async (req, res) => {
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const authHeader = req.headers.authorization ?? '';
-    const jwtFromHeader = authHeader.startsWith('Bearer ')
-      ? authHeader.slice('Bearer '.length).trim()
-      : '';
-    const jwt = jwtFromHeader || cachedJwt;
+    // Support both Supabase auth (per-user JWT) and legacy mode (cachedJwt)
+    const authReq = req as AuthenticatedRequest;
+    let jwt: string;
+    let userId: string;
+
+    if (authReq.userId) {
+      // Supabase-authenticated: provision Ghostfolio account and get per-user JWT
+      userId = authReq.userId;
+      try {
+        jwt = await ghostfolioUserService.ensureProvisioned(userId);
+      } catch {
+        // Fallback to cached JWT if provisioning fails
+        jwt = cachedJwt;
+      }
+    } else {
+      // Legacy mode: use Authorization header or cached JWT
+      const authHeader = req.headers.authorization ?? '';
+      const jwtFromHeader = authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : '';
+      jwt = jwtFromHeader || cachedJwt;
+      userId = 'unknown';
+    }
 
     if (!jwt) {
       res.status(401).json({
@@ -118,7 +143,7 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const response = await agentService.chat(body, {
-      userId: body.userId ?? 'unknown',
+      userId: body.userId ?? userId,
       baseCurrency: body.baseCurrency ?? 'USD',
       language: body.language ?? 'en',
       jwt
@@ -133,6 +158,85 @@ app.post('/api/chat', async (req, res) => {
     });
   }
 });
+
+// --- Plaid routes (conditionally available) ---
+if (agentConfig.enablePlaid) {
+  const plaidService = new PlaidService();
+
+  app.post('/api/plaid/link-token', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization ?? '';
+      const jwt = authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : cachedJwt;
+      if (!jwt) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+      const userId = (req.body as { userId?: string })?.userId ?? 'default';
+      const result = await plaidService.createLinkToken(userId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.post('/api/plaid/exchange-token', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization ?? '';
+      const jwt = authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : cachedJwt;
+      if (!jwt) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+      const body = req.body as {
+        publicToken: string;
+        institutionId?: string;
+        institutionName?: string;
+        userId?: string;
+      };
+      if (!body?.publicToken) {
+        res.status(400).json({ error: 'publicToken is required' });
+        return;
+      }
+      await plaidService.exchangePublicToken(
+        body.userId ?? 'default',
+        body.publicToken,
+        body.institutionId,
+        body.institutionName
+      );
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.get('/api/plaid/holdings', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization ?? '';
+      const jwt = authHeader.startsWith('Bearer ')
+        ? authHeader.slice('Bearer '.length).trim()
+        : cachedJwt;
+      if (!jwt) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+      const userId = (req.query.userId as string) ?? 'default';
+      const result = await plaidService.getInvestmentHoldings(userId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+}
 
 const clientDistPath = path.resolve(__dirname, '../client');
 const clientIndexPath = path.join(clientDistPath, 'index.html');

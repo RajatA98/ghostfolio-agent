@@ -115,3 +115,65 @@ export interface AgentChatResponse {
   confidence: number;
   warnings: string[];
 }
+
+// --- Plaid ---
+
+export interface PlaidHolding {
+  symbol: string;
+  name: string;
+  quantity: number;
+  costBasis: Money | null;
+  currentValue: Money | null;
+  institutionName: string;
+}
+
+export interface PlaidHoldingsResult {
+  holdings: PlaidHolding[];
+  institution: string;
+  lastSynced: IsoDate;
+}
+
+export interface ConnectBrokerageResult {
+  linkToken: string;
+  expiration: string;
+}
+
+export interface SyncToGhostfolioResult {
+  activitiesCreated: number;
+  errors: string[];
+}
+
+// --- Paper Trading (via Ghostfolio) ---
+
+export interface PaperTradeInput {
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  unitPrice: number;
+  currency?: string;
+}
+
+export interface PaperTradeResult {
+  orderId: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  unitPrice: number;
+  currency: string;
+  status: string;
+  ghostfolioSynced: boolean;
+}
+
+export interface PortfolioReadResult {
+  holdings: Array<{
+    symbol: string;
+    name?: string | null;
+    quantity: number;
+    marketPrice: number;
+    marketValue: number;
+    currency: string;
+    allocationPercent: number;
+  }>;
+  totalValue: Money;
+  asOf: IsoDate;
+}

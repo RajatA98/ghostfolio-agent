@@ -1,9 +1,10 @@
 # Golden Set — getMarketPrices
 # 10 deterministic, binary pass/fail cases. Zero LLM judge cost.
-# Note: getMarketPrices is DISABLED by default (AGENT_ENABLE_MARKET != 'true').
-# When disabled, the agent falls back to getPortfolioSnapshot for context.
+# Supports both AGENT_ENABLE_MARKET=true and AGENT_ENABLE_MARKET=false.
+# When enabled: agent uses getMarketPrices tool (Yahoo Finance).
+# When disabled (default): agent falls back to getPortfolioSnapshot.
 
-# ─── DISABLED STATE (default) ───────────────────────────────────────
+# ─── MARKET PRICE QUERIES ─────────────────────────────────────────────
 
 - id: "gs-mkt-001"
   query: "What is the current price of AAPL?"
@@ -11,6 +12,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain:
     - "guaranteed"
@@ -21,6 +27,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain: []
 
@@ -30,6 +41,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain:
     - "you should buy"
@@ -40,6 +56,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain: []
 
@@ -60,6 +81,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain:
     - "you should buy"
@@ -99,6 +125,11 @@
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
   must_contain: []
   must_not_contain:
     - "you should buy"

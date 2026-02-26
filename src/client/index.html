@@ -29,6 +29,13 @@
         <span id="connectStatus" class="connectStatus"></span>
       </section>
 
+      <section id="brokerageSection" class="brokerageSection" style="display:none">
+        <div class="brokerageRow">
+          <button id="connectBrokerageBtn" type="button">CONNECT BROKERAGE</button>
+          <span id="brokerageStatus" class="brokerageStatus"></span>
+        </div>
+      </section>
+
       <section id="messages" class="messages"></section>
 
       <section class="inputRow">
@@ -46,6 +53,7 @@
       </footer>
     </main>
 
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
