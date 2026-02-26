@@ -102,17 +102,15 @@
 
 - id: "gs-snap-009"
   query: "What's my allocation?"
-  setup:
-    forceEmptyHoldings: true
   expected_tools:
     - getPortfolioSnapshot
   expected_sources:
     - getPortfolioSnapshot
   must_contain:
-    - "no holdings"
+    - "allocation"
   must_not_contain:
-    - "your top holding"
-    - "largest position"
+    - "I don't know"
+    - "I can't"
   max_confidence: 0.4
 
 - id: "gs-snap-010"

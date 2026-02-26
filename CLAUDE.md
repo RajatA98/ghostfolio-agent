@@ -70,20 +70,30 @@ must_not_contain: ["I don't know", "no information", "guaranteed"]
 src/server/evals/
   golden_sets/
     {tool_name}.eval.yaml     ← one file per tool
+  sanity_sets/
+    sanity.eval.yaml          ← 1–2 cases per tool (TDD / fast iteration)
   scenario_sets/
     edge_cases.eval.yaml
     adversarial.eval.yaml
     multi_step.eval.yaml
   run-evals.ts                ← TypeScript runner (not Python)
-  golden-set.yaml             ← legacy, prefer golden_sets/
 ```
 
 **Run commands:**
 ```bash
+npm run evals:sanity      # sanity set only — use during TDD to save API credits
 npm run evals:golden      # runs golden_sets/
 npm run evals:scenarios   # runs scenario_sets/
 npm run evals:all         # runs everything
 ```
+
+**Re-run only failed cases:** After a run with failures, the runner logs failed case IDs and writes them to `.evals-last-failed.json`. Re-run only those evals (no full suite) with:
+```bash
+npm run evals:sanity -- --retry-failed   # or evals:golden, evals:scenarios, evals:all
+```
+The set is taken from the last run; you don’t need to pass `--set` again. Keep re-running with `--retry-failed` until all pass to avoid burning API credits on passing cases.
+
+**TDD / Cursor / Claude:** When doing test-driven development or iterating with Cursor/Claude, run **only the sanity set** (`npm run evals:sanity`) so you don’t burn API credits. After failures, use `--retry-failed` to re-run only failed evals. Run the full golden set before commit or in CI.
 
 ---
 

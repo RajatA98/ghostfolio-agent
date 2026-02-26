@@ -1,12 +1,12 @@
 import { GhostfolioPortfolioService } from '../services/ghostfolio-portfolio.service';
-import { PaperTradeResult } from '../agent.types';
+import { GhostfolioActivity, PaperTradeResult } from '../agent.types';
 import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
 
 export class PortfolioTradeTool implements ToolExecutor {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'logPaperTrade',
     description:
-      'Logs a paper trade (simulated BUY or SELL) into the portfolio. This creates a Ghostfolio activity record. The user MUST confirm the trade before you call this tool. Always get a current market price first using getMarketPrices.',
+      'Logs a simulated buy or sell to the user\'s Ghostfolio portfolio. ONLY call after explicit user confirmation. Always present full trade details and wait for "yes"/"confirm" before calling.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -52,11 +52,19 @@ export class PortfolioTradeTool implements ToolExecutor {
       throw new Error('Invalid trade parameters: symbol, side (BUY/SELL), quantity > 0, unitPrice > 0 required');
     }
 
-    const result = await this.portfolioService.logPaperTrade(
-      context.userId,
-      { symbol, side, quantity, unitPrice, currency },
-      context.jwt
-    );
+    const activity: GhostfolioActivity = {
+      accountId: '',  // uses default from config
+      currency,
+      dataSource: 'YAHOO',
+      date: new Date().toISOString(),
+      fee: 0,
+      quantity,
+      symbol,
+      type: side,
+      unitPrice
+    };
+
+    const result = await this.portfolioService.logActivity(context.userId, activity, context.jwt);
 
     return {
       orderId: result.orderId,
@@ -65,8 +73,8 @@ export class PortfolioTradeTool implements ToolExecutor {
       quantity,
       unitPrice,
       currency,
-      status: 'FILLED',
-      ghostfolioSynced: result.ghostfolioSynced
+      status: result.status === 'logged' ? 'FILLED' : 'FAILED',
+      ghostfolioSynced: result.status === 'logged'
     };
   }
 }

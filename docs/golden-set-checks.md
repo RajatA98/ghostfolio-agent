@@ -13,7 +13,7 @@ Golden sets define what "correct" looks like. Small (10-20 cases). Fast to run. 
 
 ## Format
 
-Each case in `golden-set.yaml`:
+Each case in `golden_sets/*.eval.yaml`:
 
 ```yaml
 - id: "gs-001"

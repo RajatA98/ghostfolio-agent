@@ -1,0 +1,84 @@
+---
+description: Rules for generating and running golden set evals
+globs:
+  - "src/server/evals/**"
+  - "**/*.eval.yaml"
+  - "**/run-evals.ts"
+alwaysApply: false
+---
+
+# Golden Set Evals
+
+## Required Structure
+
+Every case MUST have all 6 fields. Never omit any.
+
+```yaml
+- id: "gs-tool-001"
+  query: "user question here"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "key fact"
+    - "another fact"
+  must_not_contain:
+    - "I don't know"
+    - "no information"
+```
+
+## 4 Checks — All Required Per Tool
+
+1. **Tool selection** — assert the right tool was called
+2. **Source citation** — assert the right source was cited
+3. **Content validation** — assert key facts appear in the response
+4. **Negative validation** — assert no hallucination markers appear
+
+## Size Rules
+
+- 10–20 cases per tool (at least 2–3 minimum)
+- At least 1 ambiguous case per tool (non-obvious tool choice)
+- At least 1 edge case per tool (empty result or out-of-scope query)
+- Full suite must run in under 5 minutes
+- Run on every commit — treat like unit tests
+
+## Evaluator Script Rules (run-evals.ts)
+
+When writing or modifying `run-evals.ts`:
+
+- Exit code 1 if ANY case fails
+- Support `--verbose` and `--id` flags
+- Print case ID + failed assertion + actual output for every failure
+- Print final summary: X/Y passed (Z%)
+- Never catch and swallow assertion errors silently
+
+## Never Do These
+
+- Change expected output to make a failing test pass
+- Use vague checks ("response is helpful", "answer looks good")
+- Use token count as a quality signal
+- Skip the `must_not_contain` field
+- Use LLM-as-judge inside golden set checks — binary only
+- **ALWAYS** add a new golden case when a production bug is found
+
+## File Layout (this project)
+
+```
+src/server/evals/
+  golden_sets/
+    {tool_name}.eval.yaml
+  sanity_sets/
+    sanity.eval.yaml     ← 1–2 cases per tool; use during TDD to save API credits
+  scenario_sets/
+    edge_cases.eval.yaml
+    adversarial.eval.yaml
+    multi_step.eval.yaml
+  run-evals.ts
+```
+
+**Run commands:** `npm run evals:sanity` | `npm run evals:golden` | `npm run evals:scenarios` | `npm run evals:all`
+
+**Re-run only failed:** After a run with failures, re-run just the failed evals with `npm run evals:sanity -- --retry-failed` (or the set you used). Failed IDs are logged and saved; keep using `--retry-failed` until all pass.
+
+**TDD / Cursor / Claude:** When doing TDD or iterating with Cursor/Claude, run **only the sanity set** (`npm run evals:sanity`). After failures, use `--retry-failed` to re-run only failed evals. Use the full golden set before commit or in CI.

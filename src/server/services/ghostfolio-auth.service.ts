@@ -4,13 +4,15 @@ import { decrypt } from '../lib/encrypt';
 
 /**
  * Manages per-user Ghostfolio JWTs.
- * Each user has their own Ghostfolio access token (stored encrypted in DB).
- * This service exchanges it for a JWT and caches it.
+ * Each user has their own Ghostfolio security token (stored encrypted in DB).
+ * This service exchanges it for a JWT and caches it with a 6-month expiry.
  */
 export class GhostfolioAuthService {
+  private static readonly JWT_LIFETIME_MS = 6 * 30 * 24 * 60 * 60 * 1000; // ~6 months
+
   /**
    * Get a valid JWT for the given internal user ID.
-   * Uses cached JWT if available, otherwise exchanges the stored access token.
+   * Uses cached JWT if not expired, otherwise exchanges the stored security token.
    */
   async getJwt(userId: string): Promise<string> {
     const prisma = getPrisma();
@@ -20,30 +22,37 @@ export class GhostfolioAuthService {
       throw new Error(`User not found: ${userId}`);
     }
 
-    // If we have a cached JWT, return it
-    if (user.ghostfolioJwt) {
+    // Return cached JWT if still valid (expires > now)
+    if (
+      user.ghostfolioJwt &&
+      user.ghostfolioJwtExpiresAt &&
+      user.ghostfolioJwtExpiresAt > new Date()
+    ) {
       return user.ghostfolioJwt;
     }
 
-    // Otherwise exchange the access token for a JWT
-    if (!user.ghostfolioToken) {
-      throw new Error('User has no Ghostfolio access token. Account may not be provisioned.');
+    // Otherwise exchange the security token for a fresh JWT
+    if (!user.ghostfolioSecurityToken) {
+      throw new Error('User has no Ghostfolio security token. Account may not be provisioned.');
     }
 
-    const accessToken = decrypt(user.ghostfolioToken);
-    const jwt = await this.exchangeAccessToken(accessToken);
+    const securityToken = decrypt(user.ghostfolioSecurityToken);
+    const jwt = await this.exchangeAccessToken(securityToken);
 
-    // Cache the JWT
+    // Cache the JWT with 6-month expiry
     await prisma.user.update({
       where: { id: userId },
-      data: { ghostfolioJwt: jwt }
+      data: {
+        ghostfolioJwt: jwt,
+        ghostfolioJwtExpiresAt: new Date(Date.now() + GhostfolioAuthService.JWT_LIFETIME_MS)
+      }
     });
 
     return jwt;
   }
 
   /**
-   * Exchange a Ghostfolio access token for a JWT.
+   * Exchange a Ghostfolio security/access token for a JWT.
    */
   async exchangeAccessToken(accessToken: string): Promise<string> {
     const baseUrl = (agentConfig.ghostfolioInternalUrl || agentConfig.ghostfolioApiUrl).replace(/\/$/, '');
@@ -68,13 +77,33 @@ export class GhostfolioAuthService {
   }
 
   /**
+   * Fetch with automatic 401 retry — re-exchanges token on auth failure.
+   */
+  async authenticatedFetch(userId: string, url: string, init?: RequestInit): Promise<Response> {
+    const jwt = await this.getJwt(userId);
+    const headers = { ...((init?.headers as Record<string, string>) ?? {}), Authorization: `Bearer ${jwt}` };
+
+    const res = await fetch(url, { ...init, headers });
+
+    if (res.status === 401) {
+      // JWT expired server-side — invalidate and retry
+      await this.invalidateJwt(userId);
+      const newJwt = await this.getJwt(userId);
+      const retryHeaders = { ...((init?.headers as Record<string, string>) ?? {}), Authorization: `Bearer ${newJwt}` };
+      return fetch(url, { ...init, headers: retryHeaders });
+    }
+
+    return res;
+  }
+
+  /**
    * Invalidate cached JWT so it gets refreshed on next call.
    */
   async invalidateJwt(userId: string): Promise<void> {
     const prisma = getPrisma();
     await prisma.user.update({
       where: { id: userId },
-      data: { ghostfolioJwt: null }
+      data: { ghostfolioJwt: null, ghostfolioJwtExpiresAt: null }
     });
   }
 }

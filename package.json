@@ -13,6 +13,7 @@
     "test": "jest --runInBand",
     "evals": "tsx src/server/evals/run-evals.ts --set golden",
     "evals:golden": "tsx src/server/evals/run-evals.ts --set golden",
+    "evals:sanity": "tsx src/server/evals/run-evals.ts --set sanity",
     "evals:scenarios": "tsx src/server/evals/run-evals.ts --set scenarios",
     "evals:all": "tsx src/server/evals/run-evals.ts --set all"
   },

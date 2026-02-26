@@ -1,11 +1,19 @@
 import { agentConfig } from '../agent.config';
 import { getPrisma } from '../lib/prisma';
-import { PaperTradeInput, PortfolioReadResult } from '../agent.types';
+import { GhostfolioActivity, PortfolioReadResult } from '../agent.types';
+import { GhostfolioAuthService } from './ghostfolio-auth.service';
 
 /**
- * Reads portfolio data from Ghostfolio and logs paper trades as activities.
+ * Reads portfolio data from Ghostfolio and logs activities.
+ * All methods take userId and fetch JWT internally via GhostfolioAuthService.
  */
 export class GhostfolioPortfolioService {
+  private readonly authService: GhostfolioAuthService;
+
+  constructor(authService?: GhostfolioAuthService) {
+    this.authService = authService ?? new GhostfolioAuthService();
+  }
+
   private get baseUrl(): string {
     return (agentConfig.ghostfolioInternalUrl || agentConfig.ghostfolioApiUrl).replace(/\/$/, '');
   }
@@ -13,7 +21,8 @@ export class GhostfolioPortfolioService {
   /**
    * Read the user's portfolio holdings from Ghostfolio.
    */
-  async getPortfolioData(jwt: string): Promise<PortfolioReadResult> {
+  async getPortfolioData(userId: string): Promise<PortfolioReadResult> {
+    const jwt = await this.authService.getJwt(userId);
     const res = await fetch(`${this.baseUrl}/api/v1/portfolio/holdings`, {
       headers: { Authorization: `Bearer ${jwt}` }
     });
@@ -44,50 +53,119 @@ export class GhostfolioPortfolioService {
   }
 
   /**
-   * Log a paper trade as a Ghostfolio activity (POST /api/v1/order).
-   * This is how paper trades work — they go directly into Ghostfolio as activities.
+   * Get portfolio performance metrics.
    */
-  async logPaperTrade(
-    userId: string,
-    trade: PaperTradeInput,
-    jwt: string,
-    accountId?: string
-  ): Promise<{ orderId: string; ghostfolioSynced: boolean }> {
-    const prisma = getPrisma();
-    const now = new Date();
-
-    // Create local order record
-    const order = await prisma.order.create({
-      data: {
-        userId,
-        symbol: trade.symbol.toUpperCase(),
-        side: trade.side,
-        quantity: trade.quantity,
-        unitPrice: trade.unitPrice,
-        currency: trade.currency ?? 'USD',
-        type: 'MARKET',
-        status: 'FILLED'
-      }
+  async getPerformance(userId: string): Promise<unknown> {
+    const jwt = await this.authService.getJwt(userId);
+    const res = await fetch(`${this.baseUrl}/api/v1/portfolio/performance`, {
+      headers: { Authorization: `Bearer ${jwt}` }
     });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ghostfolio performance API ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
 
-    // Post to Ghostfolio as an activity
+  /**
+   * Get portfolio summary statistics.
+   */
+  async getSummary(userId: string): Promise<unknown> {
+    const jwt = await this.authService.getJwt(userId);
+    const res = await fetch(`${this.baseUrl}/api/v1/portfolio/summary`, {
+      headers: { Authorization: `Bearer ${jwt}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ghostfolio summary API ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Get all activities/orders, optionally filtered by account.
+   */
+  async getActivities(userId: string, accountId?: string): Promise<unknown> {
+    const jwt = await this.authService.getJwt(userId);
+    const url = accountId
+      ? `${this.baseUrl}/api/v1/order?accounts=${accountId}`
+      : `${this.baseUrl}/api/v1/order`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${jwt}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ghostfolio activities API ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Delete a specific activity by ID.
+   */
+  async deleteActivity(userId: string, activityId: string): Promise<void> {
+    const jwt = await this.authService.getJwt(userId);
+    const res = await fetch(`${this.baseUrl}/api/v1/order/${activityId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${jwt}` }
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ghostfolio delete activity ${res.status}: ${text}`);
+    }
+  }
+
+  /**
+   * Log an activity (paper trade or brokerage sync) to Ghostfolio.
+   * When jwt is provided directly (dev mode), skips Prisma and DB operations.
+   * In production, creates a local Order record with status tracking.
+   */
+  async logActivity(
+    userId: string,
+    activity: GhostfolioActivity,
+    jwt?: string
+  ): Promise<{ orderId: string; ghostfolioActivityId: string | null; status: 'logged' | 'failed' }> {
+    const token = jwt ?? await this.authService.getJwt(userId);
+    const orderId = `paper-${Date.now()}`;
+
+    // In dev mode (jwt provided directly), skip Prisma
+    const useDb = !jwt && agentConfig.databaseUrl;
+    let dbOrderId = orderId;
+
+    if (useDb) {
+      const prisma = getPrisma();
+      const order = await prisma.order.create({
+        data: {
+          userId,
+          symbol: activity.symbol.toUpperCase(),
+          side: activity.type,
+          qty: activity.quantity,
+          unitPrice: activity.unitPrice,
+          currency: activity.currency ?? 'USD',
+          status: 'pending'
+        }
+      });
+      dbOrderId = order.id;
+    }
+
     try {
-      const body: Record<string, unknown> = {
-        accountId: accountId || agentConfig.defaultAccountId || undefined,
-        comment: `Paper trade via agent (order: ${order.id})`,
-        currency: trade.currency ?? 'USD',
-        date: now.toISOString(),
-        fee: 0,
-        quantity: trade.quantity,
-        symbol: trade.symbol.toUpperCase(),
-        type: trade.side,
-        unitPrice: trade.unitPrice
+      const body = {
+        accountId: activity.accountId || agentConfig.defaultAccountId || undefined,
+        comment: `Via agent (order: ${dbOrderId})`,
+        currency: activity.currency ?? 'USD',
+        dataSource: activity.dataSource ?? 'YAHOO',
+        date: activity.date ?? new Date().toISOString(),
+        fee: activity.fee ?? 0,
+        quantity: activity.quantity,
+        symbol: activity.symbol.toUpperCase(),
+        type: activity.type,
+        unitPrice: activity.unitPrice
       };
 
       const res = await fetch(`${this.baseUrl}/api/v1/order`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${jwt}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(body)
@@ -98,15 +176,28 @@ export class GhostfolioPortfolioService {
         throw new Error(`Ghostfolio order API ${res.status}: ${text}`);
       }
 
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { ghostfolioSynced: true }
-      });
+      const data = (await res.json()) as { id?: string };
+      const ghostfolioActivityId = data.id ?? null;
 
-      return { orderId: order.id, ghostfolioSynced: true };
+      if (useDb) {
+        const prisma = getPrisma();
+        await prisma.order.update({
+          where: { id: dbOrderId },
+          data: { status: 'logged', ghostfolioActivityId }
+        });
+      }
+
+      return { orderId: dbOrderId, ghostfolioActivityId, status: 'logged' };
     } catch (err) {
-      // Order exists locally but failed to sync to Ghostfolio
-      return { orderId: order.id, ghostfolioSynced: false };
+      if (useDb) {
+        const prisma = getPrisma();
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        await prisma.order.update({
+          where: { id: dbOrderId },
+          data: { status: 'failed', errorMessage }
+        });
+      }
+      return { orderId: dbOrderId, ghostfolioActivityId: null, status: 'failed' };
     }
   }
 }

@@ -22,6 +22,7 @@ export interface RegisteredTool {
   definition: AgentToolDefinition;
   executor: ToolExecutor;
   enabled: boolean;
+  requiresConfirmation?: boolean;
 }
 
 export class ToolRegistry {
@@ -45,5 +46,9 @@ export class ToolRegistry {
     }
 
     return tool?.executor;
+  }
+
+  public needsConfirmation(name: string): boolean {
+    return this.tools.get(name)?.requiresConfirmation === true;
   }
 }

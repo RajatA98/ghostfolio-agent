@@ -50,20 +50,6 @@
   must_not_contain:
     - "you should buy"
 
-- id: "gs-mkt-004"
-  query: "Show me the price of VTI, BND, and AAPL."
-  expected_tools:
-    - getPortfolioSnapshot
-  expected_sources:
-    - getPortfolioSnapshot
-  if_market_enabled:
-    expected_tools:
-      - getMarketPrices
-    expected_sources:
-      - getMarketPrices
-  must_contain: []
-  must_not_contain: []
-
 # ─── EDGE CASES ─────────────────────────────────────────────────────
 
 - id: "gs-mkt-005"

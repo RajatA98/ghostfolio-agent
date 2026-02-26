@@ -1,70 +1,89 @@
-import { agentConfig } from '../agent.config';
-import { SyncToGhostfolioResult } from '../agent.types';
+import { GhostfolioActivity, SyncResult } from '../agent.types';
+import { getPrisma } from '../lib/prisma';
+import { GhostfolioPortfolioService } from './ghostfolio-portfolio.service';
+import { PlaidService } from './plaid.service';
 
 /**
- * Syncs Plaid holdings into Ghostfolio as BUY activities.
- * Alpaca sync has been removed — paper trades go directly via GhostfolioPortfolioService.
+ * Syncs Plaid brokerage holdings into Ghostfolio as BUY activities.
+ * Deduplicates by checking existing activities before creating new ones.
  */
 export class SyncService {
-  private get baseUrl(): string {
-    return (agentConfig.ghostfolioInternalUrl || agentConfig.ghostfolioApiUrl).replace(/\/$/, '');
-  }
+  constructor(
+    private readonly plaidService: PlaidService,
+    private readonly portfolioService: GhostfolioPortfolioService
+  ) {}
 
-  async syncPlaidHoldingsToGhostfolio(params: {
-    userId: string;
-    holdings: Array<{
-      symbol: string;
-      quantity: number;
-      costBasis: number | null;
-      currency: string;
-    }>;
-    jwt: string;
-    accountId: string;
-  }): Promise<SyncToGhostfolioResult> {
-    const { holdings, jwt, accountId } = params;
-    let activitiesCreated = 0;
-    const errors: string[] = [];
+  /**
+   * Sync holdings from a specific Plaid item into Ghostfolio.
+   * Fetches existing activities first to avoid duplicates.
+   */
+  async syncHoldingsToGhostfolio(userId: string, itemId: string): Promise<SyncResult> {
+    const prisma = getPrisma();
+    const plaidItem = await prisma.plaidItem.findUnique({ where: { itemId } });
 
-    for (const holding of holdings) {
+    if (!plaidItem) {
+      throw new Error(`PlaidItem not found: ${itemId}`);
+    }
+
+    // Get holdings from Plaid
+    const { holdings } = await this.plaidService.getHoldings(userId);
+
+    // Get existing Ghostfolio activities for deduplication
+    const existingSymbols = new Set<string>();
+    if (plaidItem.ghostfolioAccountId) {
       try {
-        const unitPrice = holding.costBasis
-          ? holding.costBasis / (holding.quantity || 1)
-          : 0;
-
-        const body: Record<string, unknown> = {
-          accountId: accountId || agentConfig.defaultAccountId || undefined,
-          comment: 'Synced from Plaid brokerage',
-          currency: holding.currency || 'USD',
-          date: new Date().toISOString(),
-          fee: 0,
-          quantity: holding.quantity,
-          symbol: holding.symbol,
-          type: 'BUY',
-          unitPrice
-        };
-
-        const res = await fetch(`${this.baseUrl}/api/v1/order`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${jwt}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        });
-
-        if (!res.ok) {
-          const text = await res.text();
-          errors.push(`${holding.symbol}: ${res.status} ${text}`);
-        } else {
-          activitiesCreated++;
+        const existingActivities = (await this.portfolioService.getActivities(
+          userId,
+          plaidItem.ghostfolioAccountId
+        )) as { activities?: Array<{ symbol?: string }> };
+        for (const a of existingActivities.activities ?? []) {
+          if (a.symbol) existingSymbols.add(a.symbol.toUpperCase());
         }
-      } catch (err) {
-        errors.push(
-          `${holding.symbol}: ${err instanceof Error ? err.message : String(err)}`
-        );
+      } catch {
+        // If we can't fetch activities, sync everything (no dedup)
       }
     }
 
-    return { activitiesCreated, errors };
+    let synced = 0;
+    let skipped = 0;
+
+    for (const holding of holdings) {
+      const symbol = holding.symbol.toUpperCase();
+
+      // Skip if already in Ghostfolio
+      if (existingSymbols.has(symbol)) {
+        skipped++;
+        continue;
+      }
+
+      const unitPrice = holding.costBasis
+        ? holding.costBasis / (holding.quantity || 1)
+        : 0;
+
+      const activity: GhostfolioActivity = {
+        accountId: plaidItem.ghostfolioAccountId ?? '',
+        currency: holding.currency ?? 'USD',
+        dataSource: 'YAHOO',
+        date: new Date().toISOString(),
+        fee: 0,
+        quantity: holding.quantity,
+        symbol,
+        type: 'BUY',
+        unitPrice
+      };
+
+      const result = await this.portfolioService.logActivity(userId, activity);
+      if (result.status === 'logged') {
+        synced++;
+      }
+    }
+
+    // Update lastSyncedAt
+    await prisma.plaidItem.update({
+      where: { itemId },
+      data: { lastSyncedAt: new Date() }
+    });
+
+    return { synced, skipped };
   }
 }

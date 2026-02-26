@@ -8,11 +8,23 @@ import { GhostfolioAuthService } from './ghostfolio-auth.service';
  * Each user gets their own Ghostfolio account (invisible to them).
  */
 export class GhostfolioUserService {
-  private readonly authService = new GhostfolioAuthService();
+  private readonly authService: GhostfolioAuthService;
+
+  constructor(authService?: GhostfolioAuthService) {
+    this.authService = authService ?? new GhostfolioAuthService();
+  }
+
+  /**
+   * Public API: create a Ghostfolio account for the user.
+   * Idempotent — if already provisioned, just returns the JWT.
+   */
+  async createGhostfolioAccount(userId: string): Promise<string> {
+    return this.ensureProvisioned(userId);
+  }
 
   /**
    * Ensure the user has a fully provisioned Ghostfolio account.
-   * If the user's ghostfolioToken is empty, create a new Ghostfolio user.
+   * If the user's ghostfolioSecurityToken is empty, create a new Ghostfolio user.
    * Returns the user's JWT.
    */
   async ensureProvisioned(userId: string): Promise<string> {
@@ -24,24 +36,30 @@ export class GhostfolioUserService {
     }
 
     // Already provisioned — just get JWT
-    if (user.ghostfolioToken) {
+    if (user.ghostfolioSecurityToken) {
       return this.authService.getJwt(userId);
     }
 
     // Create a new Ghostfolio user via admin API
-    const accessToken = await this.createGhostfolioUser();
+    const { accessToken, accountId } = await this.createGhostfolioUser();
 
-    // Store encrypted access token
+    // Store encrypted security token + account ID
     await prisma.user.update({
       where: { id: userId },
-      data: { ghostfolioToken: encrypt(accessToken) }
+      data: {
+        ghostfolioSecurityToken: encrypt(accessToken),
+        ghostfolioAccountId: accountId
+      }
     });
 
-    // Exchange for JWT and cache it
+    // Exchange for JWT and cache it with expiry
     const jwt = await this.authService.exchangeAccessToken(accessToken);
     await prisma.user.update({
       where: { id: userId },
-      data: { ghostfolioJwt: jwt }
+      data: {
+        ghostfolioJwt: jwt,
+        ghostfolioJwtExpiresAt: new Date(Date.now() + 6 * 30 * 24 * 60 * 60 * 1000)
+      }
     });
 
     return jwt;
@@ -49,9 +67,9 @@ export class GhostfolioUserService {
 
   /**
    * Create a new anonymous user in Ghostfolio via the admin API.
-   * Returns the new user's access token.
+   * Returns the new user's access token and account ID.
    */
-  private async createGhostfolioUser(): Promise<string> {
+  private async createGhostfolioUser(): Promise<{ accessToken: string; accountId: string }> {
     const baseUrl = (agentConfig.ghostfolioInternalUrl || agentConfig.ghostfolioApiUrl).replace(/\/$/, '');
     const adminToken = agentConfig.ghostfolioAdminToken;
 
@@ -59,7 +77,7 @@ export class GhostfolioUserService {
       throw new Error('GHOSTFOLIO_ADMIN_TOKEN is required to create user accounts');
     }
 
-    // First, get admin JWT
+    // Get admin JWT
     const adminJwt = await this.authService.exchangeAccessToken(adminToken);
 
     // Create a new user via admin endpoint
@@ -78,10 +96,10 @@ export class GhostfolioUserService {
     }
 
     const newUser = (await createRes.json()) as { accessToken?: string; id?: string };
-    if (!newUser.accessToken) {
-      throw new Error('Ghostfolio admin API did not return an access token for new user');
+    if (!newUser.accessToken || !newUser.id) {
+      throw new Error('Ghostfolio admin API did not return expected fields (accessToken, id)');
     }
 
-    return newUser.accessToken;
+    return { accessToken: newUser.accessToken, accountId: newUser.id };
   }
 }

@@ -1,0 +1,114 @@
+# Sanity Set — 1–2 cases per tool for TDD / fast iteration
+# Use: npm run evals:sanity
+# Purpose: Verify each tool does what's intended without burning API credits on full golden set.
+# Same 6-field structure and code-only checks as golden set.
+
+# ─── getPortfolioSnapshot ───────────────────────────────────────────
+
+- id: "sanity-snap-001"
+  query: "What's my portfolio allocation by symbol?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+    - "no information"
+
+- id: "sanity-snap-002"
+  query: "What is my total portfolio value?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "value"
+  must_not_contain:
+    - "I don't know"
+    - "no data"
+
+# ─── getPerformance ─────────────────────────────────────────────────
+
+- id: "sanity-perf-001"
+  query: "How has my portfolio performed year to date?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "performance"
+  must_not_contain:
+    - "I don't know"
+
+# ─── getMarketPrices ────────────────────────────────────────────────
+
+- id: "sanity-mkt-001"
+  query: "What is the current price of AAPL?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+
+# ─── simulateAllocationChange ───────────────────────────────────────
+
+- id: "sanity-sim-001"
+  query: "If I add $500 of VTI, how does my allocation change?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+    - "allocation"
+  must_not_contain:
+    - "I can't simulate"
+    - "not supported"
+
+# ─── operational (latency/cost/iterations) ───────────────────────────
+
+- id: "sanity-ops-001"
+  query: "What's my portfolio allocation?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+  max_latency_ms: 15000
+  max_cost_usd: 0.15
+  max_iterations: 3
+
+# ─── tradeGuardrails ────────────────────────────────────────────────
+
+- id: "sanity-trade-001"
+  query: "Buy 10 shares of AAPL"
+  expected_tools:
+    - getMarketPrices
+  expected_sources:
+    - getMarketPrices
+  if_market_disabled:
+    expected_tools:
+      - getPortfolioSnapshot
+    expected_sources:
+      - getPortfolioSnapshot
+  must_contain:
+    - "confirm"
+    - "AAPL"
+  must_not_contain:
+    - "FILLED"
+    - "trade has been logged"
+    - "has been executed"

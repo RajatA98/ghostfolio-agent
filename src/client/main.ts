@@ -1,6 +1,11 @@
+import { createClient, Session } from '@supabase/supabase-js';
 import { AgentChatHistoryService } from './chat-history';
 
-const JWT_STORAGE_KEY = 'ghostfolio_agent_jwt';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string || '';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string || '';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const API_BASE = '';
 
 type AgentResponse = {
@@ -11,13 +16,17 @@ type AgentResponse = {
 
 const history = new AgentChatHistoryService();
 
+// DOM elements
 const messagesEl = document.getElementById('messages') as HTMLDivElement;
 const messageInput = document.getElementById('messageInput') as HTMLInputElement;
 const sendButton = document.getElementById('sendButton') as HTMLButtonElement;
-const accessTokenInput = document.getElementById('accessTokenInput') as HTMLInputElement;
-const connectButton = document.getElementById('connectButton') as HTMLButtonElement;
-const disconnectButton = document.getElementById('disconnectButton') as HTMLButtonElement;
-const connectStatusEl = document.getElementById('connectStatus') as HTMLSpanElement;
+const emailInput = document.getElementById('emailInput') as HTMLInputElement;
+const passwordInput = document.getElementById('passwordInput') as HTMLInputElement;
+const signUpButton = document.getElementById('signUpButton') as HTMLButtonElement;
+const signInButton = document.getElementById('signInButton') as HTMLButtonElement;
+const signOutButton = document.getElementById('signOutButton') as HTMLButtonElement;
+const authStatusEl = document.getElementById('authStatus') as HTMLSpanElement;
+const authSection = document.getElementById('authSection') as HTMLElement;
 
 // Status bar elements
 const headerDot = document.getElementById('headerDot') as HTMLSpanElement;
@@ -27,33 +36,51 @@ const statusDot = document.getElementById('statusDot') as HTMLSpanElement;
 const statusText = document.getElementById('statusText') as HTMLSpanElement;
 const statusClock = document.getElementById('statusClock') as HTMLSpanElement;
 
+let currentSession: Session | null = null;
+
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-function getStoredJwt(): string | null {
-  try {
-    return sessionStorage.getItem(JWT_STORAGE_KEY);
-  } catch {
-    return null;
+function getAccessToken(): string | null {
+  return currentSession?.access_token ?? null;
+}
+
+function setAuthStatus(text: string, isError = false): void {
+  authStatusEl.textContent = text;
+  authStatusEl.className = 'connectStatus' + (isError ? ' error' : '');
+}
+
+function updateTerminalStatus(): void {
+  const connected = !!currentSession;
+  if (headerDot) headerDot.style.background = connected ? '#33ff33' : '#ff3333';
+  if (headerStatus) headerStatus.textContent = connected ? 'CONNECTED' : 'OFFLINE';
+  if (statusDot) statusDot.className = 'statusDot' + (connected ? ' connected' : '');
+  if (statusText) statusText.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+}
+
+function updateAuthUI(): void {
+  const loggedIn = !!currentSession;
+
+  // Show/hide form fields vs sign out
+  emailInput.style.display = loggedIn ? 'none' : '';
+  passwordInput.style.display = loggedIn ? 'none' : '';
+  signUpButton.style.display = loggedIn ? 'none' : '';
+  signInButton.style.display = loggedIn ? 'none' : '';
+  signOutButton.style.display = loggedIn ? '' : 'none';
+
+  // Update hint text
+  const hint = authSection.querySelector('.connectHint') as HTMLElement;
+  if (hint) {
+    hint.textContent = loggedIn
+      ? `Signed in as ${currentSession!.user.email ?? 'user'}`
+      : 'Sign up or sign in with your email and password to connect.';
   }
-}
 
-function setStoredJwt(jwt: string): void {
-  sessionStorage.setItem(JWT_STORAGE_KEY, jwt);
-}
-
-function clearStoredJwt(): void {
-  sessionStorage.removeItem(JWT_STORAGE_KEY);
-}
-
-function setConnectStatus(text: string, isError = false): void {
-  connectStatusEl.textContent = text;
-  connectStatusEl.className = 'connectStatus' + (isError ? ' error' : '');
   updateTerminalStatus();
 }
 
-// ── Clock & status bar ──
+// ── Clock ──
 function updateClock(): void {
   const now = new Date();
   const ts = now.toLocaleTimeString('en-US', { hour12: false });
@@ -63,36 +90,116 @@ function updateClock(): void {
   if (statusClock) statusClock.textContent = full;
 }
 
-function updateTerminalStatus(): void {
-  const connected = !!getStoredJwt();
-  if (headerDot) headerDot.style.background = connected ? '#33ff33' : '#ff3333';
-  if (headerStatus) headerStatus.textContent = connected ? 'CONNECTED' : 'OFFLINE';
-  if (statusDot) statusDot.className = 'statusDot' + (connected ? ' connected' : '');
-  if (statusText) statusText.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
-}
-
 setInterval(updateClock, 1000);
 updateClock();
 
-render();
-updateConnectStatus();
-updateTerminalStatus();
-void checkServerAuth();
+// ── Supabase auth ──
 
-connectButton.addEventListener('click', () => {
-  void connect();
+async function handleSignUp(): Promise<void> {
+  const email = emailInput.value.trim();
+  const password = passwordInput.value.trim();
+
+  if (!email || !password) {
+    setAuthStatus('Email and password are required.', true);
+    return;
+  }
+
+  if (password.length < 6) {
+    setAuthStatus('Password must be at least 6 characters.', true);
+    return;
+  }
+
+  setAuthStatus('SIGNING UP...');
+
+  const { data, error } = await supabase.auth.signUp({ email, password });
+
+  if (error) {
+    setAuthStatus(`Sign up failed: ${error.message}`, true);
+    return;
+  }
+
+  if (data.session) {
+    currentSession = data.session;
+    // Provision Ghostfolio account on first signup
+    try {
+      await fetch(apiUrl('/api/auth/signup'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${data.session.access_token}`
+        }
+      });
+    } catch {
+      // Non-fatal: account provisioning can happen on first chat
+    }
+    setAuthStatus('Signed up and connected!');
+    updateAuthUI();
+  } else {
+    setAuthStatus('Check your email to confirm your account.');
+  }
+}
+
+async function handleSignIn(): Promise<void> {
+  const email = emailInput.value.trim();
+  const password = passwordInput.value.trim();
+
+  if (!email || !password) {
+    setAuthStatus('Email and password are required.', true);
+    return;
+  }
+
+  setAuthStatus('SIGNING IN...');
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+  if (error) {
+    setAuthStatus(`Sign in failed: ${error.message}`, true);
+    return;
+  }
+
+  currentSession = data.session;
+  setAuthStatus('Signed in!');
+  updateAuthUI();
+}
+
+async function handleSignOut(): Promise<void> {
+  await supabase.auth.signOut();
+  currentSession = null;
+  setAuthStatus('');
+  updateAuthUI();
+}
+
+// Listen for auth state changes (e.g. token refresh)
+supabase.auth.onAuthStateChange((_event, session) => {
+  currentSession = session;
+  updateAuthUI();
 });
 
-disconnectButton.addEventListener('click', () => {
-  clearStoredJwt();
-  setConnectStatus('');
-  updateConnectStatus();
+// Check for existing session on load
+async function initSession(): Promise<void> {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) {
+    currentSession = data.session;
+    setAuthStatus('Signed in!');
+    updateAuthUI();
+  }
+}
+
+// ── Event listeners ──
+
+signUpButton.addEventListener('click', () => void handleSignUp());
+signInButton.addEventListener('click', () => void handleSignIn());
+signOutButton.addEventListener('click', () => void handleSignOut());
+
+// Allow Enter in password field to sign in
+passwordInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void handleSignIn();
+  }
 });
 
-sendButton.addEventListener('click', () => {
-  void sendMessage();
-});
-
+sendButton.addEventListener('click', () => void sendMessage());
 messageInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -100,127 +207,17 @@ messageInput.addEventListener('keydown', (event) => {
   }
 });
 
-/** JWTs are three base64url segments separated by dots. Allow pasted tokens with line breaks. */
-function looksLikeJwt(value: string): boolean {
-  const normalized = value.replace(/\s/g, '').trim();
-  if (normalized.length < 50) return false;
-  const parts = normalized.split('.');
-  return parts.length === 3 && parts.every((p) => /^[A-Za-z0-9_-]+$/.test(p));
-}
+// ── Chat ──
 
-async function connect(): Promise<void> {
-  const rawInput = accessTokenInput.value.trim();
-  const input = rawInput.replace(/\s/g, ''); // normalize so JWT with line breaks still works
-
-  if (!input) {
-    setConnectStatus('Enter your Ghostfolio JWT or access token.', true);
-    return;
-  }
-
-  // If it looks like a JWT, verify the agent is reachable then store the token.
-  if (looksLikeJwt(input)) {
-    try {
-      const healthRes = await fetch(apiUrl('/health'));
-      if (!healthRes.ok) {
-        setConnectStatus(`Agent returned HTTP ${healthRes.status}.`, true);
-        return;
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const isNetworkError =
-        msg.includes('fetch') || msg.includes('Load failed') || msg.includes('NetworkError');
-      const hint = isNetworkError
-        ? ' Is the agent server running? In dev, run `npm run dev` in one terminal and `npm run dev:client` in another.'
-        : '';
-      setConnectStatus(`Could not reach the agent.${hint}`, true);
-      return;
-    }
-    setStoredJwt(input);
-    setConnectStatus('Connected (using JWT)');
-    accessTokenInput.value = '';
-    return;
-  }
-
-  // Otherwise treat as access token and exchange for JWT (agent will call Ghostfolio).
-  setConnectStatus('Connecting…');
-
-  try {
-    const response = await fetch(apiUrl('/api/auth/ghostfolio'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accessToken: input })
-    });
-
-    let data: { authToken?: string; error?: string } | null = null;
-    try {
-      data = (await response.json()) as { authToken?: string; error?: string };
-    } catch {
-      data = null;
-    }
-
-    if (!response.ok) {
-      clearStoredJwt();
-      const msg = data?.error ?? `Auth failed with HTTP ${response.status}.`;
-      const hint =
-        msg.includes('fetch failed') || msg.includes('ECONNREFUSED')
-          ? ' Is Ghostfolio running? Check server `.env` `GHOSTFOLIO_API_URL`.'
-          : '';
-      setConnectStatus(msg + hint, true);
-      return;
-    }
-
-    if (typeof data?.authToken === 'string') {
-      setStoredJwt(data.authToken);
-      setConnectStatus('Connected');
-      accessTokenInput.value = '';
-    } else {
-      clearStoredJwt();
-      setConnectStatus('No token returned.', true);
-    }
-  } catch (error) {
-    clearStoredJwt();
-    const msg = error instanceof Error ? error.message : String(error);
-    const isNetworkError =
-      msg.includes('fetch failed') || msg.includes('Failed to fetch') || msg.includes('Load failed');
-    const hint = isNetworkError
-      ? ' Could not reach the agent server. In dev, run `npm run dev` and `npm run dev:client`.'
-      : '';
-    setConnectStatus(`Failed to connect.${hint}`, true);
-  }
-}
-
-function updateConnectStatus(): void {
-  if (getStoredJwt()) {
-    setConnectStatus('Connected');
-  } else if (!connectStatusEl.textContent) {
-    setConnectStatus('');
-  }
-}
-
-async function checkServerAuth(): Promise<void> {
-  try {
-    const res = await fetch(apiUrl('/api/auth/status'));
-    if (!res.ok) return;
-    const data = (await res.json()) as { authenticated?: boolean };
-    if (data?.authenticated) {
-      // Server already has a JWT (set via .env) — no manual connect needed.
-      document.getElementById('connectSection')!.style.display = 'none';
-      // Update status to show connected
-      if (headerDot) headerDot.style.background = '#33ff33';
-      if (headerStatus) headerStatus.textContent = 'CONNECTED';
-      if (statusDot) statusDot.className = 'statusDot connected';
-      if (statusText) statusText.textContent = 'CONNECTED (SERVER)';
-    }
-  } catch {
-    // Agent not reachable yet — ignore.
-  }
-}
-
-async function sendMessage() {
+async function sendMessage(): Promise<void> {
   const message = messageInput.value.trim();
-  const jwt = getStoredJwt();
+  const token = getAccessToken();
 
-  if (!message) {
+  if (!message) return;
+
+  if (!token) {
+    history.appendAssistantMessage('Please sign in first to use the terminal.');
+    render();
     return;
   }
 
@@ -228,8 +225,10 @@ async function sendMessage() {
   messageInput.value = '';
   render();
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`
+  };
 
   try {
     const allMessages = history.getMessages();
@@ -244,10 +243,33 @@ async function sendMessage() {
     });
 
     if (response.status === 401) {
-      clearStoredJwt();
-      updateConnectStatus();
+      // Try refreshing the session
+      const { data } = await supabase.auth.refreshSession();
+      if (data.session) {
+        currentSession = data.session;
+        // Retry the request
+        const retryRes = await fetch(apiUrl('/api/chat'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${data.session.access_token}`
+          },
+          body: JSON.stringify({ message, conversationHistory })
+        });
+        if (retryRes.ok) {
+          const retryData = (await retryRes.json()) as AgentResponse;
+          history.appendAssistantMessage(retryData.answer, {
+            confidence: retryData.confidence,
+            warnings: retryData.warnings
+          });
+          render();
+          return;
+        }
+      }
+      currentSession = null;
+      updateAuthUI();
       history.appendAssistantMessage(
-        'Session expired. Please connect again with your Ghostfolio JWT or access token.',
+        'Session expired. Please sign in again.',
         {}
       );
       render();
@@ -299,7 +321,9 @@ async function sendMessage() {
   render();
 }
 
-function render() {
+// ── Render ──
+
+function render(): void {
   const messages = history.getMessages();
   messagesEl.innerHTML = messages
     .map((message) => {
@@ -324,11 +348,10 @@ function render() {
     })
     .join('');
 
-  // Auto-scroll to bottom
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function escapeHtml(text: string) {
+function escapeHtml(text: string): string {
   return text
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -359,13 +382,16 @@ const brokerageStatus = document.getElementById('brokerageStatus') as HTMLSpanEl
 
 async function checkPlaidAvailability(): Promise<void> {
   try {
-    // Check if plaid routes exist by attempting the link-token endpoint
+    const token = getAccessToken();
+    if (!token) return;
     const res = await fetch(apiUrl('/api/plaid/link-token'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
       body: JSON.stringify({})
     });
-    // If we get a 404, Plaid is not enabled
     if (res.status !== 404) {
       brokerageSection.style.display = '';
     }
@@ -374,9 +400,7 @@ async function checkPlaidAvailability(): Promise<void> {
   }
 }
 
-connectBrokerageBtn.addEventListener('click', () => {
-  void openPlaidLink();
-});
+connectBrokerageBtn.addEventListener('click', () => void openPlaidLink());
 
 async function openPlaidLink(): Promise<void> {
   if (!window.Plaid) {
@@ -384,16 +408,21 @@ async function openPlaidLink(): Promise<void> {
     return;
   }
 
+  const token = getAccessToken();
+  if (!token) {
+    brokerageStatus.textContent = 'Please sign in first';
+    return;
+  }
+
   brokerageStatus.textContent = 'INITIALIZING...';
 
   try {
-    const jwt = getStoredJwt();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
-
     const res = await fetch(apiUrl('/api/plaid/link-token'), {
       method: 'POST',
-      headers,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
       body: JSON.stringify({})
     });
 
@@ -434,10 +463,14 @@ async function exchangePlaidToken(
 ): Promise<void> {
   brokerageStatus.textContent = 'CONNECTING...';
 
+  const token = getAccessToken();
+  if (!token) return;
+
   try {
-    const jwt = getStoredJwt();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    };
 
     const res = await fetch(apiUrl('/api/plaid/exchange-token'), {
       method: 'POST',
@@ -451,9 +484,25 @@ async function exchangePlaidToken(
       return;
     }
 
+    const exchangeData = (await res.json()) as { success: boolean; itemId?: string };
+
+    // Trigger sync after successful exchange
+    if (exchangeData.itemId) {
+      brokerageStatus.textContent = 'SYNCING HOLDINGS...';
+      try {
+        await fetch(apiUrl('/api/plaid/sync'), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ itemId: exchangeData.itemId })
+        });
+      } catch {
+        // Non-fatal: sync can be triggered manually via chat
+      }
+    }
+
     brokerageStatus.textContent = `CONNECTED: ${institutionName ?? 'BROKERAGE'}`;
     history.appendAssistantMessage(
-      `Brokerage "${institutionName ?? 'Unknown'}" has been connected successfully. You can now ask me about your holdings or sync them to Ghostfolio.`
+      `Brokerage "${institutionName ?? 'Unknown'}" has been connected and holdings synced. You can now ask me about your portfolio.`
     );
     render();
   } catch (error) {
@@ -461,5 +510,9 @@ async function exchangePlaidToken(
   }
 }
 
-// Check Plaid availability on load
-void checkPlaidAvailability();
+// ── Init ──
+render();
+updateTerminalStatus();
+void initSession().then(() => {
+  void checkPlaidAvailability();
+});

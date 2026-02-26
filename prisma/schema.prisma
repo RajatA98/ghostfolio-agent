@@ -9,29 +9,33 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(cuid())
-  supabaseId      String   @unique
-  email           String?
-  ghostfolioToken String   // AES-256-GCM encrypted Ghostfolio access token
-  ghostfolioJwt   String?  // cached JWT (refreshed periodically)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                      String    @id @default(uuid())
+  supabaseUserId          String    @unique
+  email                   String?
+  ghostfolioAccountId     String?   @unique
+  ghostfolioSecurityToken String?   // AES-256-GCM encrypted Ghostfolio security token
+  ghostfolioJwt           String?   // cached JWT — valid ~6 months
+  ghostfolioJwtExpiresAt  DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   plaidItems PlaidItem[]
   orders     Order[]
 
-  @@index([supabaseId])
+  @@index([supabaseUserId])
 }
 
 model PlaidItem {
-  id              String   @id @default(cuid())
-  userId          String
-  itemId          String   @unique
-  accessToken     String   // AES-256-GCM encrypted
-  institutionId   String?
-  institutionName String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                   String    @id @default(uuid())
+  userId               String
+  itemId               String    @unique
+  accessTokenEncrypted String    // AES-256-GCM encrypted
+  institutionId        String?
+  institutionName      String?
+  ghostfolioAccountId  String?   // Ghostfolio account for this brokerage
+  lastSyncedAt         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id])
 
@@ -39,18 +43,18 @@ model PlaidItem {
 }
 
 model Order {
-  id               String   @id @default(cuid())
-  userId           String
-  symbol           String
-  side             String   // "BUY" | "SELL"
-  quantity         Float
-  unitPrice        Float
-  currency         String   @default("USD")
-  type             String   // "MARKET" | "LIMIT"
-  status           String   // "PENDING" | "FILLED" | "CANCELLED"
-  ghostfolioSynced Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  userId               String
+  symbol               String
+  side                 String   // "BUY" | "SELL"
+  qty                  Decimal
+  unitPrice            Decimal
+  currency             String   @default("USD")
+  status               String   @default("pending") // "pending" | "logged" | "failed"
+  ghostfolioActivityId String?
+  errorMessage         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id])
 

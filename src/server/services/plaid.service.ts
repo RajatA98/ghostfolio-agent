@@ -8,6 +8,7 @@ import {
 import { agentConfig } from '../agent.config';
 import { getPrisma } from '../lib/prisma';
 import { encrypt, decrypt } from '../lib/encrypt';
+import { GhostfolioAuthService } from './ghostfolio-auth.service';
 
 export class PlaidService {
   private client: PlaidApi;
@@ -44,12 +45,37 @@ export class PlaidService {
     publicToken: string,
     institutionId?: string,
     institutionName?: string
-  ): Promise<void> {
+  ): Promise<{ itemId: string }> {
     const response = await this.client.itemPublicTokenExchange({
       public_token: publicToken
     });
     const accessToken = response.data.access_token;
     const itemId = response.data.item_id;
+
+    // Create a Ghostfolio brokerage account for this connection
+    let ghostfolioAccountId: string | null = null;
+    try {
+      const authService = new GhostfolioAuthService();
+      const jwt = await authService.getJwt(userId);
+      const baseUrl = (agentConfig.ghostfolioInternalUrl || agentConfig.ghostfolioApiUrl).replace(/\/$/, '');
+      const accountRes = await fetch(`${baseUrl}/api/v1/account`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: institutionName ?? 'Brokerage',
+          currency: 'USD'
+        })
+      });
+      if (accountRes.ok) {
+        const data = (await accountRes.json()) as { id?: string };
+        ghostfolioAccountId = data.id ?? null;
+      }
+    } catch {
+      // Non-fatal — account creation in Ghostfolio failed, holdings can still be synced
+    }
 
     const prisma = getPrisma();
     await prisma.plaidItem.upsert({
@@ -57,19 +83,23 @@ export class PlaidService {
       create: {
         userId,
         itemId,
-        accessToken: encrypt(accessToken),
+        accessTokenEncrypted: encrypt(accessToken),
         institutionId: institutionId ?? null,
-        institutionName: institutionName ?? null
+        institutionName: institutionName ?? null,
+        ghostfolioAccountId
       },
       update: {
-        accessToken: encrypt(accessToken),
+        accessTokenEncrypted: encrypt(accessToken),
         institutionId: institutionId ?? null,
-        institutionName: institutionName ?? null
+        institutionName: institutionName ?? null,
+        ghostfolioAccountId
       }
     });
+
+    return { itemId };
   }
 
-  async getInvestmentHoldings(userId: string): Promise<{
+  async getHoldings(userId: string): Promise<{
     holdings: Array<{
       symbol: string;
       name: string;
@@ -102,7 +132,7 @@ export class PlaidService {
     }> = [];
 
     for (const item of items) {
-      const accessToken = decrypt(item.accessToken);
+      const accessToken = decrypt(item.accessTokenEncrypted);
       const response = await this.client.investmentsHoldingsGet({
         access_token: accessToken
       });
@@ -126,5 +156,32 @@ export class PlaidService {
     }
 
     return { holdings: allHoldings };
+  }
+
+  async getTransactions(userId: string): Promise<{ transactions: unknown[] }> {
+    const prisma = getPrisma();
+    const items = await prisma.plaidItem.findMany({ where: { userId } });
+
+    if (items.length === 0) {
+      throw new Error('No brokerage connections found.');
+    }
+
+    const allTransactions: unknown[] = [];
+    for (const item of items) {
+      const accessToken = decrypt(item.accessTokenEncrypted);
+      const now = new Date();
+      const startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
+        .toISOString()
+        .split('T')[0];
+      const endDate = now.toISOString().split('T')[0];
+      const response = await this.client.investmentsTransactionsGet({
+        access_token: accessToken,
+        start_date: startDate,
+        end_date: endDate
+      });
+      allTransactions.push(...response.data.investment_transactions);
+    }
+
+    return { transactions: allTransactions };
   }
 }

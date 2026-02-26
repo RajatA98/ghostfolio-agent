@@ -16,17 +16,29 @@
     </header>
 
     <main class="container">
-      <section id="connectSection" class="connectSection">
-        <p class="connectHint">Paste your <strong>JWT</strong> (from the URL after logging in at Ghostfolio, e.g. <code>…/auth/eyJhbG…</code>) or your <strong>access token</strong> (Settings → Account).</p>
+      <section id="authSection" class="connectSection">
+        <p class="connectHint">Sign up or sign in with your email and password to connect.</p>
         <label>
-          GHOSTFOLIO JWT OR ACCESS TOKEN
-          <input id="accessTokenInput" type="password" placeholder="PASTE JWT OR ACCESS TOKEN" autocomplete="off" />
+          EMAIL
+          <input id="emailInput" type="email" placeholder="EMAIL" autocomplete="email" />
+        </label>
+        <label>
+          PASSWORD
+          <input id="passwordInput" type="password" placeholder="PASSWORD" autocomplete="current-password" />
         </label>
         <div class="connectRow">
-          <button id="connectButton" type="button">CONNECT</button>
-          <button id="disconnectButton" type="button">DISCONNECT</button>
+          <button id="signUpButton" type="button">SIGN UP</button>
+          <button id="signInButton" type="button">SIGN IN</button>
+          <button id="signOutButton" type="button" style="display:none">SIGN OUT</button>
         </div>
-        <span id="connectStatus" class="connectStatus"></span>
+        <span id="authStatus" class="connectStatus"></span>
+      </section>
+
+      <section id="brokerageSection" class="brokerageSection" style="display:none">
+        <div class="brokerageRow">
+          <button id="connectBrokerageBtn" type="button">CONNECT BROKERAGE</button>
+          <span id="brokerageStatus" class="brokerageStatus"></span>
+        </div>
       </section>
 
       <section id="brokerageSection" class="brokerageSection" style="display:none">

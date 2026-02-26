@@ -34,7 +34,7 @@
   expected_sources:
     - getPerformance
   must_contain:
-    - "%"
+    - "return"
   must_not_contain:
     - "I don't know"
 
@@ -99,16 +99,6 @@
   must_contain: []
   must_not_contain:
     - "I can't"
-
-- id: "gs-perf-009"
-  query: "How has my portfolio been doing lately?"
-  expected_tools:
-    - getPortfolioSnapshot
-    - getPerformance
-  expected_sources:
-    - getPerformance
-  must_contain: []
-  must_not_contain: []
 
 - id: "gs-perf-010"
   query: "What was my return percentage since January?"

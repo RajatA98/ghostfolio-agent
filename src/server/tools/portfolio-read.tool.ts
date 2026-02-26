@@ -1,15 +1,21 @@
 import { GhostfolioPortfolioService } from '../services/ghostfolio-portfolio.service';
-import { PortfolioReadResult } from '../agent.types';
 import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
 
 export class PortfolioReadTool implements ToolExecutor {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'getPortfolioData',
     description:
-      "Reads the user's full portfolio from Ghostfolio including all holdings, market values, and allocation percentages. Use this to answer questions about what the user owns, their portfolio value, and allocation breakdown.",
+      "Gets the user's portfolio from Ghostfolio. Use for any question about their holdings, performance, returns, net worth, or trade history.",
     input_schema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['holdings', 'performance', 'summary', 'activities'],
+          description:
+            'The type of portfolio data to retrieve. Defaults to holdings.'
+        }
+      },
       required: []
     }
   };
@@ -17,9 +23,21 @@ export class PortfolioReadTool implements ToolExecutor {
   constructor(private readonly portfolioService: GhostfolioPortfolioService) {}
 
   public async execute(
-    _input: Record<string, unknown>,
+    input: Record<string, unknown>,
     context: ToolContext
-  ): Promise<PortfolioReadResult> {
-    return this.portfolioService.getPortfolioData(context.jwt);
+  ): Promise<unknown> {
+    const dataType = String(input.type ?? 'holdings');
+
+    switch (dataType) {
+      case 'performance':
+        return this.portfolioService.getPerformance(context.userId);
+      case 'summary':
+        return this.portfolioService.getSummary(context.userId);
+      case 'activities':
+        return this.portfolioService.getActivities(context.userId);
+      case 'holdings':
+      default:
+        return this.portfolioService.getPortfolioData(context.userId);
+    }
   }
 }

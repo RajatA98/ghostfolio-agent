@@ -1,0 +1,47 @@
+# Golden Set — Operational Bounds
+# Verifies the agent completes within latency and cost budgets.
+# These cases also test the ReAct loop iteration count.
+
+- id: "gs-ops-001"
+  query: "What's my portfolio allocation?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+  max_latency_ms: 15000
+  max_cost_usd: 0.15
+  max_iterations: 3
+
+- id: "gs-ops-002"
+  query: "Show my allocation and simulate buying $1000 of VTI."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+  must_not_contain:
+    - "I can't simulate"
+  max_latency_ms: 20000
+  max_cost_usd: 0.25
+  max_iterations: 5
+
+- id: "gs-ops-003"
+  query: "How has my portfolio performed year to date?"
+  expected_tools:
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "performance"
+  must_not_contain:
+    - "I don't have access"
+  max_latency_ms: 15000
+  max_cost_usd: 0.15
+  max_iterations: 3

@@ -69,6 +69,14 @@ interface EvalCase {
   if_market_enabled?: MarketModeOverrides;
   if_market_disabled?: MarketModeOverrides;
 
+  // Multi-turn conversation history (simulates prior turns)
+  conversation_history?: { role: 'user' | 'assistant'; content: string }[];
+
+  // Operational bounds (latency, cost, iterations)
+  max_latency_ms?: number;
+  max_cost_usd?: number;
+  max_iterations?: number;
+
   // Labeled scenario metadata (ignored in checks, used for reporting)
   category?: string;
   subcategory?: string;
@@ -81,6 +89,17 @@ interface AllocationRow {
   percent: number;
 }
 
+interface LoopMeta {
+  iterations: number;
+  totalMs: number;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  terminationReason: string;
+}
+
 interface AgentResponse {
   answer: string;
   toolTrace: { tool: string; ok: boolean; ms: number; error?: string | null }[];
@@ -91,6 +110,7 @@ interface AgentResponse {
     totalValue?: { currency: string; amount: number };
   };
   warnings?: string[];
+  loopMeta?: LoopMeta;
 }
 
 interface CheckResult {
@@ -110,6 +130,7 @@ interface CaseResult {
   passed: boolean;
   checks: CheckResult[];
   actual?: ActualResponse | null;
+  loopMeta?: LoopMeta | null;
 }
 
 // ─── Pass/fail by code only (no LLM) ───────────────────────────────
@@ -234,6 +255,51 @@ function checkAllocationSum(data?: AgentResponse['data']): CheckResult {
   };
 }
 
+// ─── Operational Checks (latency, cost, iterations) ─────────────────
+
+/** Approximate cost per token for Claude Sonnet. */
+const COST_PER_INPUT_TOKEN = 3.0 / 1_000_000;   // $3/MTok
+const COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000;  // $15/MTok
+
+function checkLatency(maxMs: number, actualMs: number): CheckResult {
+  const ok = actualMs <= maxMs;
+  return {
+    check: 'latency',
+    passed: ok,
+    detail: ok
+      ? `✓ latency ${actualMs}ms <= ${maxMs}ms`
+      : `✗ latency ${actualMs}ms > ${maxMs}ms — too slow`
+  };
+}
+
+function checkCost(
+  maxUsd: number,
+  tokenUsage: { inputTokens: number; outputTokens: number }
+): CheckResult {
+  const cost =
+    tokenUsage.inputTokens * COST_PER_INPUT_TOKEN +
+    tokenUsage.outputTokens * COST_PER_OUTPUT_TOKEN;
+  const ok = cost <= maxUsd;
+  return {
+    check: 'cost',
+    passed: ok,
+    detail: ok
+      ? `✓ cost $${cost.toFixed(4)} <= $${maxUsd.toFixed(4)}`
+      : `✗ cost $${cost.toFixed(4)} > $${maxUsd.toFixed(4)} — over budget`
+  };
+}
+
+function checkIterationCount(maxIter: number, actualIter: number): CheckResult {
+  const ok = actualIter <= maxIter;
+  return {
+    check: 'iterations',
+    passed: ok,
+    detail: ok
+      ? `✓ iterations ${actualIter} <= ${maxIter}`
+      : `✗ iterations ${actualIter} > ${maxIter} — loop ran too long`
+  };
+}
+
 // ─── Market Mode Resolution ─────────────────────────────────────────
 
 function resolveMarketMode(cases: EvalCase[]): EvalCase[] {
@@ -290,7 +356,12 @@ async function runCase(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${jwt}`
       },
-      body: JSON.stringify({ message: evalCase.query })
+      body: JSON.stringify({
+        message: evalCase.query,
+        ...(evalCase.conversation_history?.length
+          ? { conversationHistory: evalCase.conversation_history }
+          : {})
+      })
     });
 
     if (!res.ok) {
@@ -391,6 +462,19 @@ async function runCase(
       }
     }
 
+    // ─── Operational checks (latency, cost, iterations) ─────────────
+    if (response.loopMeta) {
+      if (typeof evalCase.max_latency_ms === 'number') {
+        checks.push(checkLatency(evalCase.max_latency_ms, response.loopMeta.totalMs));
+      }
+      if (typeof evalCase.max_cost_usd === 'number') {
+        checks.push(checkCost(evalCase.max_cost_usd, response.loopMeta.tokenUsage));
+      }
+      if (typeof evalCase.max_iterations === 'number') {
+        checks.push(checkIterationCount(evalCase.max_iterations, response.loopMeta.iterations));
+      }
+    }
+
     const passed = checks.every((c) => c.passed);
     const snippet =
       answer.length > 140 ? answer.slice(0, 140).trim() + '…' : answer.trim();
@@ -399,7 +483,7 @@ async function runCase(
       confidence,
       answerSnippet: snippet.replace(/\s+/g, ' ').replace(/"/g, "'")
     };
-    return { id: evalCase.id, passed, checks, actual };
+    return { id: evalCase.id, passed, checks, actual, loopMeta: response.loopMeta ?? null };
   }
 
   // All retries exhausted — return failure
@@ -471,9 +555,35 @@ function printPerToolSummary(
   }
 }
 
+// ─── Failed cases persistence (for --retry-failed) ────────────────────
+
+const EVALS_LAST_FAILED_FILE = path.join(__dirname, '.evals-last-failed.json');
+
+interface LastFailedPayload {
+  set: EvalSet;
+  ids: string[];
+}
+
+function readLastFailed(): LastFailedPayload | null {
+  if (!fs.existsSync(EVALS_LAST_FAILED_FILE)) return null;
+  try {
+    const raw = fs.readFileSync(EVALS_LAST_FAILED_FILE, 'utf-8');
+    const data = JSON.parse(raw) as LastFailedPayload;
+    if (!data.ids?.length) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastFailed(set: EvalSet, failedIds: string[]): void {
+  const payload: LastFailedPayload = { set, ids: failedIds };
+  fs.writeFileSync(EVALS_LAST_FAILED_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+}
+
 // ─── Main ───────────────────────────────────────────────────────────
 
-type EvalSet = 'golden' | 'scenarios' | 'all';
+type EvalSet = 'golden' | 'sanity' | 'scenarios' | 'all';
 
 function parseEvalSetArg(): EvalSet {
   const setArg = process.argv.find((arg) => arg.startsWith('--set='));
@@ -481,55 +591,81 @@ function parseEvalSetArg(): EvalSet {
   const setIndex = process.argv.indexOf('--set');
   const setFromNext = setIndex >= 0 ? process.argv[setIndex + 1] : undefined;
   const selected = (setFromEquals ?? setFromNext ?? 'golden').toLowerCase();
+  if (selected === 'sanity') return 'sanity';
   if (selected === 'scenarios') return 'scenarios';
   if (selected === 'all') return 'all';
   return 'golden';
 }
 
+function hasRetryFailedFlag(): boolean {
+  return process.argv.includes('--retry-failed');
+}
+
 async function runEvalSet(): Promise<void> {
-  const set = parseEvalSetArg();
+  const retryFailed = hasRetryFailedFlag();
+  let set = parseEvalSetArg();
+
+  // --retry-failed: run only cases that failed in the last run
+  let retryFailedIds: string[] | null = null;
+  if (retryFailed) {
+    const last = readLastFailed();
+    if (!last || !last.ids.length) {
+      console.log('\nNo failed cases to retry. Run evals first; use --retry-failed after a run that had failures.\n');
+      return;
+    }
+    set = last.set;
+    retryFailedIds = last.ids;
+  }
 
   // Load cases based on set selection
   let goldenCases: EvalCase[] = [];
+  let sanityCases: EvalCase[] = [];
   let scenarioCases: EvalCase[] = [];
 
   if (set === 'golden' || set === 'all') {
-    // Load from golden_sets/ directory first, then fall back to golden-set.yaml
     const goldenDir = path.join(__dirname, 'golden_sets');
     const { cases: dirCases } = loadCasesFromDir(goldenDir);
-    if (dirCases.length > 0) {
-      goldenCases = dirCases;
-    } else {
-      const legacyPath = path.join(__dirname, 'golden-set.yaml');
-      if (fs.existsSync(legacyPath)) {
-        goldenCases = loadYamlCases(legacyPath);
-      }
-    }
+    goldenCases = dirCases;
+  }
+
+  if (set === 'sanity') {
+    const sanityDir = path.join(__dirname, 'sanity_sets');
+    const { cases: dirCases } = loadCasesFromDir(sanityDir);
+    sanityCases = dirCases;
   }
 
   if (set === 'scenarios' || set === 'all') {
-    // Load from scenario_sets/ directory first, then fall back to scenario-set.yaml
     const scenarioDir = path.join(__dirname, 'scenario_sets');
     const { cases: dirCases } = loadCasesFromDir(scenarioDir);
-    if (dirCases.length > 0) {
-      scenarioCases = dirCases;
-    } else {
-      const legacyPath = path.join(__dirname, 'scenario-set.yaml');
-      if (fs.existsSync(legacyPath)) {
-        scenarioCases = loadYamlCases(legacyPath);
-      }
+    scenarioCases = dirCases;
+  }
+
+  let allCases = resolveMarketMode([...goldenCases, ...sanityCases, ...scenarioCases]);
+
+  if (retryFailed && retryFailedIds) {
+    const idSet = new Set(retryFailedIds);
+    allCases = allCases.filter((c) => idSet.has(c.id));
+    if (allCases.length === 0) {
+      console.log(`\nNo cases from last run's failed list found in set "${set}". (IDs may have changed.)\n`);
+      return;
     }
   }
 
-  const allCases = resolveMarketMode([...goldenCases, ...scenarioCases]);
   const setLabel =
     set === 'golden' ? 'Golden Set' :
+    set === 'sanity' ? 'Sanity Set' :
     set === 'scenarios' ? 'Scenario Set' :
     'All Evals';
 
   console.log(`\n🏆 ${setLabel}: ${allCases.length} cases loaded`);
+  if (retryFailed) {
+    console.log(`   (retrying failed cases from last run only)`);
+  }
   if (set === 'all') {
     console.log(`   (${goldenCases.length} golden + ${scenarioCases.length} scenarios)`);
+  }
+  if (set === 'sanity' && !retryFailed) {
+    console.log(`   (TDD / fast iteration — run full golden before commit)`);
   }
   console.log('');
 
@@ -544,8 +680,9 @@ async function runEvalSet(): Promise<void> {
     console.log(
       `Set EVAL_BASE_URL (and optionally EVAL_JWT) to run ${setLabel.toLowerCase()} against a live agent.\n`
     );
+    const scriptName = set === 'sanity' ? 'evals:sanity' : set === 'golden' ? 'evals:golden' : set === 'scenarios' ? 'evals:scenarios' : 'evals:all';
     console.log(
-      `Example: EVAL_BASE_URL=http://localhost:3334 EVAL_JWT=… npm run evals:${set}\n`
+      `Example: EVAL_BASE_URL=http://localhost:3334 EVAL_JWT=… npm run ${scriptName}\n`
     );
 
     console.log('Cases that would run:');
@@ -613,6 +750,24 @@ async function runEvalSet(): Promise<void> {
   // Per-tool pass rate
   printPerToolSummary(allCases, allResults);
 
+  // ─── Operational stats ──────────────────────────────────────────
+  const withMeta = allResults.filter((r) => r.loopMeta);
+  if (withMeta.length > 0) {
+    const latencies = withMeta.map((r) => r.loopMeta!.totalMs);
+    const costs = withMeta.map((r) => {
+      const u = r.loopMeta!.tokenUsage;
+      return u.inputTokens * COST_PER_INPUT_TOKEN + u.outputTokens * COST_PER_OUTPUT_TOKEN;
+    });
+    const iterations = withMeta.map((r) => r.loopMeta!.iterations);
+
+    console.log(`\n${DIM}Operational stats:${RESET}`);
+    console.log(`  Avg latency: ${(latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(0)}ms`);
+    console.log(`  Max latency: ${Math.max(...latencies)}ms`);
+    console.log(`  Avg iterations: ${(iterations.reduce((a, b) => a + b, 0) / iterations.length).toFixed(1)}`);
+    console.log(`  Total cost: $${costs.reduce((a, b) => a + b, 0).toFixed(4)}`);
+    console.log(`  Avg cost/query: $${(costs.reduce((a, b) => a + b, 0) / costs.length).toFixed(4)}`);
+  }
+
   if (failures.length > 0) {
     console.log(`\n${RED}Failed cases:${RESET}`);
     for (const f of failures) {
@@ -620,15 +775,28 @@ async function runEvalSet(): Promise<void> {
       const types = Array.from(new Set(failedChecks.map((c) => c.check)));
       console.log(`  ${RED}❌ ${f.id}${RESET} — ${types.join(', ')}`);
     }
+    writeLastFailed(set, failures.map((f) => f.id));
+    console.log(`\n${DIM}Failed IDs saved. Re-run only these with: npm run evals:${set === 'sanity' ? 'sanity' : set === 'golden' ? 'golden' : set === 'scenarios' ? 'scenarios' : 'all'} -- --retry-failed${RESET}`);
+  } else {
+    // All passed — clear last-failed file so next --retry-failed doesn't run stale list
+    if (fs.existsSync(EVALS_LAST_FAILED_FILE)) {
+      fs.unlinkSync(EVALS_LAST_FAILED_FILE);
+    }
   }
 
   console.log('');
 
-  // Exit 1 if golden set has failures (CI-friendly)
+  // Exit 1 if golden or sanity set has failures (CI-friendly)
   const goldenFailCount = failures.filter((f) =>
     goldenCases.some((gc) => gc.id === f.id)
   ).length;
+  const sanityFailCount = failures.filter((f) =>
+    sanityCases.some((sc) => sc.id === f.id)
+  ).length;
   if ((set === 'golden' || set === 'all') && goldenFailCount > 0) {
+    process.exit(1);
+  }
+  if (set === 'sanity' && sanityFailCount > 0) {
     process.exit(1);
   }
 }

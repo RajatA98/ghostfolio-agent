@@ -6,14 +6,6 @@ export const agentConfig = {
     );
   },
 
-  get ghostfolioJwt(): string {
-    return process.env.GHOSTFOLIO_JWT || '';
-  },
-
-  get ghostfolioAccessToken(): string {
-    return process.env.GHOSTFOLIO_ACCESS_TOKEN || '';
-  },
-
   get defaultAccountId(): string {
     return process.env.AGENT_DEFAULT_ACCOUNT_ID || '';
   },
@@ -50,6 +42,23 @@ export const agentConfig = {
 
   get temperature(): number {
     return Number(process.env.AGENT_TEMPERATURE || 0.2);
+  },
+
+  // --- Guardrails ---
+  get maxIterations(): number {
+    return Number(process.env.AGENT_MAX_ITERATIONS || 15);
+  },
+
+  get timeoutMs(): number {
+    return Number(process.env.AGENT_TIMEOUT_MS || 45000);
+  },
+
+  get costLimitTokens(): number {
+    return Number(process.env.AGENT_COST_LIMIT_TOKENS || 100000);
+  },
+
+  get circuitBreakerThreshold(): number {
+    return Number(process.env.AGENT_CIRCUIT_BREAKER_THRESHOLD || 3);
   },
 
   get langsmithTracing(): boolean {

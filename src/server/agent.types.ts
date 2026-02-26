@@ -102,6 +102,28 @@ export interface AgentChatRequest {
   userId?: string;
 }
 
+/** Tracks token usage across all iterations of a single agent request. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/** Metadata about the agent loop execution. */
+export interface AgentLoopMeta {
+  iterations: number;
+  totalMs: number;
+  tokenUsage: TokenUsage;
+  terminationReason:
+    | 'end_turn'
+    | 'max_iterations'
+    | 'timeout'
+    | 'cost_limit'
+    | 'circuit_breaker'
+    | 'trade_blocked'
+    | 'error';
+}
+
 export interface AgentChatResponse {
   answer: string;
   data: {
@@ -114,6 +136,7 @@ export interface AgentChatResponse {
   toolTrace: ToolTraceRow[];
   confidence: number;
   warnings: string[];
+  loopMeta?: AgentLoopMeta;
 }
 
 // --- Plaid ---
@@ -138,9 +161,21 @@ export interface ConnectBrokerageResult {
   expiration: string;
 }
 
-export interface SyncToGhostfolioResult {
-  activitiesCreated: number;
-  errors: string[];
+export interface SyncResult {
+  synced: number;
+  skipped: number;
+}
+
+export interface GhostfolioActivity {
+  accountId: string;
+  currency: string;
+  dataSource: 'YAHOO';
+  date: string;
+  fee: number;
+  quantity: number;
+  symbol: string;
+  type: 'BUY' | 'SELL';
+  unitPrice: number;
 }
 
 // --- Paper Trading (via Ghostfolio) ---

@@ -2,17 +2,29 @@ import { Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { agentConfig } from '../agent.config';
 import { getPrisma } from '../lib/prisma';
+import { GhostfolioUserService } from '../services/ghostfolio-user.service';
 
 export interface AuthenticatedRequest extends Request {
   userId?: string; // internal Prisma User.id
-  supabaseId?: string;
+  supabaseUserId?: string;
+  /** In dev fallback mode, this holds the raw JWT for Ghostfolio API calls */
+  devJwt?: string;
+}
+
+const ghostfolioUserService = new GhostfolioUserService();
+
+/**
+ * Dev fallback: when Supabase is not configured, allow direct JWT auth
+ * (for local development and evals).
+ */
+function isDevMode(): boolean {
+  return !agentConfig.supabaseUrl || !agentConfig.supabaseAnonKey;
 }
 
 /**
- * Supabase auth middleware.
- * Expects `Authorization: Bearer <supabase_access_token>` header.
- * Validates the token, looks up or creates the internal User record,
- * and attaches `userId` + `supabaseId` to the request.
+ * Auth middleware.
+ * - Production: Supabase auth (expects `Authorization: Bearer <supabase_access_token>`)
+ * - Dev fallback: Direct JWT auth when Supabase is not configured
  */
 export async function requireAuth(
   req: AuthenticatedRequest,
@@ -29,6 +41,14 @@ export async function requireAuth(
     return;
   }
 
+  // Dev fallback: skip Supabase, use JWT directly
+  if (isDevMode()) {
+    req.userId = 'dev-user';
+    req.devJwt = token;
+    next();
+    return;
+  }
+
   try {
     const supabase = createClient(agentConfig.supabaseUrl, agentConfig.supabaseAnonKey);
     const { data, error } = await supabase.auth.getUser(token);
@@ -38,27 +58,34 @@ export async function requireAuth(
       return;
     }
 
-    const supabaseId = data.user.id;
+    const supabaseUserId = data.user.id;
     const email = data.user.email ?? null;
 
     // Look up or create internal user record
     const prisma = getPrisma();
-    let user = await prisma.user.findUnique({ where: { supabaseId } });
+    let user = await prisma.user.findUnique({ where: { supabaseUserId } });
 
     if (!user) {
-      // User will be fully provisioned (Ghostfolio account) on first chat
-      // For now just create the DB row with placeholder token
+      // Create user record
       user = await prisma.user.create({
         data: {
-          supabaseId,
-          email,
-          ghostfolioToken: '' // will be populated by GhostfolioUserService
+          supabaseUserId,
+          email
         }
       });
+
+      // Provision Ghostfolio account transparently (non-fatal)
+      try {
+        await ghostfolioUserService.createGhostfolioAccount(user.id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to auto-provision Ghostfolio account:', err instanceof Error ? err.message : err);
+        // Non-fatal: account can be provisioned later on first chat
+      }
     }
 
     req.userId = user.id;
-    req.supabaseId = supabaseId;
+    req.supabaseUserId = supabaseUserId;
     next();
   } catch (err) {
     res.status(500).json({

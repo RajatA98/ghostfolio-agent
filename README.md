@@ -13,7 +13,7 @@ Standalone AI agent service and frontend for Ghostfolio.
 | Conversation history maintained across turns | ✓ (client sends `conversationHistory` to API) |
 | Basic error handling (graceful failure, not crashes) | ✓ |
 | At least one domain-specific verification check | ✓ (advice boundary, allocation sum, cost-basis labeling in `agent.verifier`) |
-| Simple evaluation: 5+ test cases with expected outcomes | ✓ (Jest: 5 unit tests; golden set: 16 deterministic data-retrieval cases in `golden-set.yaml`; scenario set in `scenario-set.yaml`) |
+| Simple evaluation: 5+ test cases with expected outcomes | ✓ (Jest: 5 unit tests; golden set cases in `golden_sets/*.eval.yaml`; scenario set in `scenario_sets/*.eval.yaml`) |
 | Deployed and publicly accessible | Deploy via Railway, Docker, or VPS (see below) |
 
 ## What it does
@@ -58,8 +58,8 @@ If your agent UI is served from a different origin (e.g. another domain), set `C
 ## Evaluation
 
 - **Unit tests**: `npm test` runs 5 Jest tests (agent service: direct response, portfolio snapshot, performance, synthesis, tool error handling).
-- **Golden set evals**: 16 data-retrieval cases in `src/server/evals/golden-set.yaml` using four deterministic check types — tool selection, source citation, content validation, negative validation. All checks are code evals: binary pass/fail, no LLM needed. See [docs/golden-set-checks.md](docs/golden-set-checks.md) for details.
-- **Scenario evals**: advice/behavior cases in `src/server/evals/scenario-set.yaml` (e.g., buy/sell advice, prediction, tax-advice prompts). These are still deterministic checks but do not block CI by default.
+- **Golden set evals**: data-retrieval cases in `src/server/evals/golden_sets/*.eval.yaml` using four deterministic check types — tool selection, source citation, content validation, negative validation. All checks are code evals: binary pass/fail, no LLM needed. See [docs/golden-set-checks.md](docs/golden-set-checks.md) for details.
+- **Scenario evals**: advice/behavior cases in `src/server/evals/scenario_sets/*.eval.yaml` (e.g., buy/sell advice, prediction, tax-advice prompts). These are still deterministic checks but do not block CI by default.
 - **Run golden set** against a live agent: set `EVAL_BASE_URL` and `EVAL_JWT` in `.env` (or use `GHOSTFOLIO_JWT` / `GHOSTFOLIO_ACCESS_TOKEN`), then:
   ```bash
   npm run evals:golden
