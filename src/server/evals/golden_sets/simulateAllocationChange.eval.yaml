@@ -1,0 +1,155 @@
+# Golden Set — simulateAllocationChange
+# 12 deterministic, binary pass/fail cases. Zero LLM judge cost.
+
+# ─── HAPPY PATH ─────────────────────────────────────────────────────
+
+- id: "gs-sim-001"
+  query: "If I add $500 of VTI, how does my allocation change?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+    - "allocation"
+  must_not_contain:
+    - "I can't simulate"
+    - "not supported"
+
+- id: "gs-sim-002"
+  query: "What's my portfolio worth, and if I add $1000 of VTI and $1000 of BND, what would the new allocation look like?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+    - "BND"
+    - "allocation"
+  must_not_contain:
+    - "I can't simulate"
+    - "not supported"
+
+- id: "gs-sim-003"
+  query: "Simulate buying $2000 of MSFT and show me the new allocation."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "MSFT"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-004"
+  query: "What if I sell $500 of AAPL?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "I can't simulate"
+
+# ─── EDGE CASES ─────────────────────────────────────────────────────
+
+- id: "gs-sim-005"
+  query: "If I sell $100000 of AAPL, what happens to my allocation?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "AAPL"
+  must_not_contain: []
+
+- id: "gs-sim-006"
+  query: "What if I buy $100 of VTI and sell $200 of BND at the same time?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+    - "BND"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-007"
+  query: "Simulate adding $10000 to my portfolio in GOOGL."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "GOOGL"
+  must_not_contain:
+    - "I can't simulate"
+
+- id: "gs-sim-008"
+  query: "What would my allocation look like if I bought $5000 of TSLA?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "TSLA"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-009"
+  query: "If I buy $1 of AAPL, what changes?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-010"
+  query: "What if I add $500 of VTI and another $500 of VTI?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-011"
+  query: "Simulate buying $1000 of BND and show allocation percentages."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "BND"
+    - "%"
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-sim-012"
+  query: "If I sell all my AAPL shares, what does my portfolio look like?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "I can't access"

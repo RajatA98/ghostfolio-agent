@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  supabaseId      String   @unique
+  email           String?
+  ghostfolioToken String   // AES-256-GCM encrypted Ghostfolio access token
+  ghostfolioJwt   String?  // cached JWT (refreshed periodically)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  plaidItems PlaidItem[]
+  orders     Order[]
+
+  @@index([supabaseId])
+}
+
+model PlaidItem {
+  id              String   @id @default(cuid())
+  userId          String
+  itemId          String   @unique
+  accessToken     String   // AES-256-GCM encrypted
+  institutionId   String?
+  institutionName String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Order {
+  id               String   @id @default(cuid())
+  userId           String
+  symbol           String
+  side             String   // "BUY" | "SELL"
+  quantity         Float
+  unitPrice        Float
+  currency         String   @default("USD")
+  type             String   // "MARKET" | "LIMIT"
+  status           String   // "PENDING" | "FILLED" | "CANCELLED"
+  ghostfolioSynced Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}

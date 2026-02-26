@@ -1,0 +1,136 @@
+# Golden Set — getMarketPrices
+# 10 deterministic, binary pass/fail cases. Zero LLM judge cost.
+# Supports both AGENT_ENABLE_MARKET=true and AGENT_ENABLE_MARKET=false.
+# When enabled: agent uses getMarketPrices tool (Yahoo Finance).
+# When disabled (default): agent falls back to getPortfolioSnapshot.
+
+# ─── MARKET PRICE QUERIES ─────────────────────────────────────────────
+
+- id: "gs-mkt-001"
+  query: "What is the current price of AAPL?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+
+- id: "gs-mkt-002"
+  query: "Get me market prices for MSFT and GOOGL."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain: []
+
+- id: "gs-mkt-003"
+  query: "What is Bitcoin trading at right now?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+
+- id: "gs-mkt-004"
+  query: "Show me the price of VTI, BND, and AAPL."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain: []
+
+# ─── EDGE CASES ─────────────────────────────────────────────────────
+
+- id: "gs-mkt-005"
+  query: "What is the price of XYZNONEXISTENT?"
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "guaranteed returns"
+    - "you should buy"
+
+- id: "gs-mkt-006"
+  query: "Compare AAPL price to MSFT price."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+
+- id: "gs-mkt-007"
+  query: "Is my AAPL holding worth more or less than the current market price would suggest?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't access"
+
+- id: "gs-mkt-008"
+  query: "Get market prices."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain: []
+
+- id: "gs-mkt-009"
+  query: "What are the latest stock prices for my holdings?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-mkt-010"
+  query: "How much is one share of AMZN worth today?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+    - "guaranteed"

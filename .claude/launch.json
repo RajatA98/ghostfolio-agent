@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "dev-server",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "watch", "src/server/main.ts"],
+      "port": 3334
+    },
+    {
       "name": "vite-client",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "--config", "vite.config.ts", "--port", "5190", "--host"],

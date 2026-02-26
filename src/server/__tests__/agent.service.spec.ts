@@ -132,6 +132,8 @@ describe('AgentService', () => {
       stop_reason: 'end_turn'
     });
 
+    // "performance?" triggers synthetic getPortfolioSnapshot via isPortfolioIntent,
+    // so we need two fetch mocks: one for getPerformance, one for getPortfolioSnapshot.
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -140,6 +142,24 @@ describe('AgentService', () => {
           { date: '2026-01-01', netWorth: 1000, netPerformanceInPercentage: 0.1 }
         ],
         performance: { netPerformancePercentage: 0.1 }
+      })
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        hasErrors: false,
+        holdings: {
+          AAPL: {
+            symbol: 'AAPL',
+            name: 'Apple',
+            currency: 'USD',
+            quantity: 10,
+            marketPrice: 185.5,
+            investment: 1500,
+            valueInBaseCurrency: 1855,
+            assetClass: 'EQUITY'
+          }
+        }
       })
     });
 
@@ -154,8 +174,12 @@ describe('AgentService', () => {
       }
     );
 
-    expect(result.toolTrace).toHaveLength(1);
+    // 2 tools: model-requested getPerformance + synthetic getPortfolioSnapshot
+    expect(result.toolTrace).toHaveLength(2);
     expect(result.toolTrace[0].tool).toBe('getPerformance');
+    expect(result.toolTrace[0].ok).toBe(true);
+    expect(result.toolTrace[1].tool).toBe('getPortfolioSnapshot');
+    expect(result.toolTrace[1].ok).toBe(true);
     expect(mockFetch.mock.calls[0][0]).toContain('/api/v2/portfolio/performance');
   });
 
@@ -214,7 +238,10 @@ describe('AgentService', () => {
     expect(result.answer).toContain('portfolio');
     expect(result.data.valuationMethod).toBeDefined();
     expect(result.toolTrace[0].ok).toBe(true);
-    expect(result.confidence).toBeGreaterThan(0);
+    // Tools succeeded, has holdings, no price data missing → confidence = 1.0
+    expect(result.confidence).toBe(1.0);
+    expect(result.data.allocationBySymbol!.length).toBe(1);
+    expect(result.data.allocationBySymbol![0].key).toBe('AAPL');
   });
 
   it('handles tool execution failure gracefully and returns response', async () => {
@@ -254,8 +281,9 @@ describe('AgentService', () => {
 
     expect(result.toolTrace).toHaveLength(1);
     expect(result.toolTrace[0].ok).toBe(false);
-    expect(result.toolTrace[0].error).toBeDefined();
+    expect(result.toolTrace[0].error).toContain('Network error');
     expect(result.answer).toBeDefined();
-    expect(result.confidence).toBeLessThanOrEqual(1);
+    // All tools failed, none succeeded → confidence = 0.1
+    expect(result.confidence).toBe(0.1);
   });
 });

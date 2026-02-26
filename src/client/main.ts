@@ -337,3 +337,129 @@ function escapeHtml(text: string) {
     .replaceAll("'", '&#039;')
     .replaceAll('\n', '<br/>');
 }
+
+// ── Plaid Link Integration ──
+
+declare global {
+  interface Window {
+    Plaid?: {
+      create(config: {
+        token: string;
+        onSuccess: (publicToken: string, metadata: { institution?: { institution_id?: string; name?: string } }) => void;
+        onExit: (err: unknown) => void;
+        onEvent: (eventName: string) => void;
+      }): { open: () => void };
+    };
+  }
+}
+
+const brokerageSection = document.getElementById('brokerageSection') as HTMLElement;
+const connectBrokerageBtn = document.getElementById('connectBrokerageBtn') as HTMLButtonElement;
+const brokerageStatus = document.getElementById('brokerageStatus') as HTMLSpanElement;
+
+async function checkPlaidAvailability(): Promise<void> {
+  try {
+    // Check if plaid routes exist by attempting the link-token endpoint
+    const res = await fetch(apiUrl('/api/plaid/link-token'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    // If we get a 404, Plaid is not enabled
+    if (res.status !== 404) {
+      brokerageSection.style.display = '';
+    }
+  } catch {
+    // Plaid routes not available
+  }
+}
+
+connectBrokerageBtn.addEventListener('click', () => {
+  void openPlaidLink();
+});
+
+async function openPlaidLink(): Promise<void> {
+  if (!window.Plaid) {
+    brokerageStatus.textContent = 'Plaid SDK not loaded';
+    return;
+  }
+
+  brokerageStatus.textContent = 'INITIALIZING...';
+
+  try {
+    const jwt = getStoredJwt();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+
+    const res = await fetch(apiUrl('/api/plaid/link-token'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({})
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+      brokerageStatus.textContent = `ERROR: ${data?.error ?? res.status}`;
+      return;
+    }
+
+    const { linkToken } = (await res.json()) as { linkToken: string };
+
+    const handler = window.Plaid.create({
+      token: linkToken,
+      onSuccess: (publicToken: string, metadata) => {
+        void exchangePlaidToken(publicToken, metadata.institution?.institution_id, metadata.institution?.name);
+      },
+      onExit: (err) => {
+        if (err) {
+          brokerageStatus.textContent = 'CONNECTION CANCELLED';
+        } else {
+          brokerageStatus.textContent = '';
+        }
+      },
+      onEvent: () => { /* no-op */ }
+    });
+
+    handler.open();
+    brokerageStatus.textContent = '';
+  } catch (error) {
+    brokerageStatus.textContent = `ERROR: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+async function exchangePlaidToken(
+  publicToken: string,
+  institutionId?: string,
+  institutionName?: string
+): Promise<void> {
+  brokerageStatus.textContent = 'CONNECTING...';
+
+  try {
+    const jwt = getStoredJwt();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+
+    const res = await fetch(apiUrl('/api/plaid/exchange-token'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ publicToken, institutionId, institutionName })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+      brokerageStatus.textContent = `ERROR: ${data?.error ?? res.status}`;
+      return;
+    }
+
+    brokerageStatus.textContent = `CONNECTED: ${institutionName ?? 'BROKERAGE'}`;
+    history.appendAssistantMessage(
+      `Brokerage "${institutionName ?? 'Unknown'}" has been connected successfully. You can now ask me about your holdings or sync them to Ghostfolio.`
+    );
+    render();
+  } catch (error) {
+    brokerageStatus.textContent = `ERROR: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+// Check Plaid availability on load
+void checkPlaidAvailability();

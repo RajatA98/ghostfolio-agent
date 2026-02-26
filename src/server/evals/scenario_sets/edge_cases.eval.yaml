@@ -1,0 +1,84 @@
+# Labeled Scenarios — Edge Cases
+# Tests boundary conditions, ambiguous inputs, and unusual requests.
+
+- id: "sc-edge-001"
+  query: "How did my portfolio perform?"
+  category: edge_case
+  subcategory: missing_timeframe
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-edge-002"
+  query: "What's my allocation in EUR?"
+  category: edge_case
+  subcategory: currency_mention
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-edge-003"
+  query: "I want to understand my portfolio. Can you show me everything - my allocation by symbol, by asset class, my total value, how I have performed year to date, month to date, and for the last five years? Also simulate what happens if I buy $1000 of VTI and $500 of BND. I want to see all of this information presented clearly with percentages and dollar amounts. Please also explain what each number means and whether my portfolio is diversified enough. I am especially interested in knowing if I should rebalance, though I understand you cannot give financial advice. Just show me the data and let me draw my own conclusions about whether my asset allocation matches typical recommendations for a moderate risk tolerance investor with a 20 year time horizon."
+  category: edge_case
+  subcategory: long_query
+  difficulty: edge_case
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"
+    - "guaranteed"
+
+- id: "sc-edge-004"
+  query: "Zeige mir meine Portfolio-Allokation bitte."
+  category: edge_case
+  subcategory: non_english
+  difficulty: edge_case
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't understand"
+
+- id: "sc-edge-005"
+  query: "portfolio"
+  category: edge_case
+  subcategory: minimal_query
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't understand"
+
+- id: "sc-edge-006"
+  query: "What is the meaning of life?"
+  category: edge_case
+  subcategory: off_topic
+  difficulty: edge_case
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"

@@ -12,9 +12,16 @@ import {
 } from './agent.types';
 import { computeConfidence, verifyAgentResponse } from './agent.verifier';
 import { createAnthropicClient, withLangfuseTrace } from './observability';
+import { GhostfolioPortfolioService } from './services/ghostfolio-portfolio.service';
+import { PlaidService } from './services/plaid.service';
+import { SyncService } from './services/sync.service';
 import { GetMarketPricesTool } from './tools/get-market-prices.tool';
 import { GetPerformanceTool } from './tools/get-performance.tool';
 import { GetPortfolioSnapshotTool } from './tools/get-portfolio-snapshot.tool';
+import { PlaidConnectTool } from './tools/plaid-connect.tool';
+import { PlaidSyncTool } from './tools/plaid-sync.tool';
+import { PortfolioReadTool } from './tools/portfolio-read.tool';
+import { PortfolioTradeTool } from './tools/portfolio-trade.tool';
 import { SimulateAllocationChangeTool } from './tools/simulate-allocation-change.tool';
 import { ToolContext, ToolRegistry } from './tools/tool-registry';
 
@@ -54,6 +61,39 @@ export class AgentService {
       executor: new GetMarketPricesTool(),
       enabled: agentConfig.enableExternalMarketData
     });
+
+    // --- Ghostfolio portfolio tools (paper trading via Ghostfolio) ---
+    const portfolioService = new GhostfolioPortfolioService();
+
+    this.toolRegistry.register({
+      definition: PortfolioReadTool.DEFINITION,
+      executor: new PortfolioReadTool(portfolioService),
+      enabled: true
+    });
+
+    this.toolRegistry.register({
+      definition: PortfolioTradeTool.DEFINITION,
+      executor: new PortfolioTradeTool(portfolioService),
+      enabled: true
+    });
+
+    // --- Plaid tools (conditionally enabled) ---
+    if (agentConfig.enablePlaid) {
+      const plaidService = new PlaidService();
+      const syncService = new SyncService();
+
+      this.toolRegistry.register({
+        definition: PlaidConnectTool.DEFINITION,
+        executor: new PlaidConnectTool(plaidService),
+        enabled: true
+      });
+
+      this.toolRegistry.register({
+        definition: PlaidSyncTool.DEFINITION,
+        executor: new PlaidSyncTool(plaidService, syncService),
+        enabled: true
+      });
+    }
   }
 
   public async chat(
@@ -382,7 +422,19 @@ export class AgentService {
       'vti',
       'msft',
       'bnd',
-      'tax'
+      'tax',
+      'return',
+      'money',
+      'made',
+      'lost',
+      'month-to-date',
+      'price',
+      'stock',
+      'share',
+      'bitcoin',
+      'crypto',
+      'equit',
+      'bond'
     ];
     return keywords.some((k) => lowerMessage.includes(k));
   }
@@ -396,7 +448,11 @@ export class AgentService {
       lowerMessage.includes('ytd') ||
       lowerMessage.includes('recently') ||
       lowerMessage.includes('how did i do') ||
-      lowerMessage.includes('this month')
+      lowerMessage.includes('this month') ||
+      lowerMessage.includes('month-to-date') ||
+      lowerMessage.includes('returns') ||
+      lowerMessage.includes('made or lost') ||
+      lowerMessage.includes('how did my portfolio perform')
     );
   }
 
@@ -421,32 +477,50 @@ export class AgentService {
         : 'buy';
 
     const changes: AllocationChange[] = [];
-    const pairRegex = /\$?\s*([\d,]+(?:\.\d+)?)\s+of\s+([A-Za-z.]{1,10})/gi;
-    let match: RegExpExecArray | null;
+    const seen = new Set<string>();
 
-    while ((match = pairRegex.exec(message)) !== null) {
-      const amount = Number(match[1].replace(/,/g, ''));
-      const symbol = match[2].replace(/[^A-Za-z]/g, '').toUpperCase();
-      if (!Number.isFinite(amount) || amount <= 0 || !symbol) {
-        continue;
-      }
-      const localContext = message
-        .slice(Math.max(0, match.index - 16), match.index + 24)
-        .toLowerCase();
+    const pushChange = (
+      amount: number,
+      symbol: string,
+      localContext: string
+    ) => {
+      if (!Number.isFinite(amount) || amount <= 0 || !symbol) return;
+      const key = `${symbol}:${amount}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       const type: 'buy' | 'sell' = localContext.includes('sell')
         ? 'sell'
         : localContext.includes('buy') || localContext.includes('add')
           ? 'buy'
           : defaultType;
-
       changes.push({
         type,
         symbol,
-        amount: {
-          currency: baseCurrency,
-          amount
-        }
+        amount: { currency: baseCurrency, amount }
       });
+    };
+
+    // "$AMOUNT of SYMBOL" (e.g. "buy $5000 of TSLA")
+    const ofRegex = /\$?\s*([\d,]+(?:\.\d+)?)\s+of\s+([A-Za-z.]{1,10})/gi;
+    let match: RegExpExecArray | null;
+    while ((match = ofRegex.exec(message)) !== null) {
+      const amount = Number(match[1].replace(/,/g, ''));
+      const symbol = match[2].replace(/[^A-Za-z]/g, '').toUpperCase();
+      const localContext = message
+        .slice(Math.max(0, match.index - 16), match.index + 24)
+        .toLowerCase();
+      pushChange(amount, symbol, localContext);
+    }
+
+    // "$AMOUNT ... in SYMBOL" (e.g. "adding $10000 to my portfolio in GOOGL")
+    const inRegex = /\$?\s*([\d,]+(?:\.\d+)?)\s+.*?\s+in\s+([A-Za-z.]{1,10})\b/gi;
+    while ((match = inRegex.exec(message)) !== null) {
+      const amount = Number(match[1].replace(/,/g, ''));
+      const symbol = match[2].replace(/[^A-Za-z]/g, '').toUpperCase();
+      const localContext = message
+        .slice(Math.max(0, match.index - 20), match.index + 30)
+        .toLowerCase();
+      pushChange(amount, symbol, localContext);
     }
 
     return changes;

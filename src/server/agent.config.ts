@@ -81,5 +81,48 @@ export const agentConfig = {
 
   get corsOrigin(): string {
     return process.env.CORS_ORIGIN || 'http://localhost:5173';
+  },
+
+  // --- Plaid ---
+  get plaidClientId(): string {
+    return process.env.PLAID_CLIENT_ID || '';
+  },
+  get plaidSecret(): string {
+    return process.env.PLAID_SECRET || '';
+  },
+  get plaidEnv(): string {
+    return process.env.PLAID_ENV || 'sandbox';
+  },
+  get enablePlaid(): boolean {
+    return !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);
+  },
+
+  // --- Supabase ---
+  get supabaseUrl(): string {
+    return process.env.SUPABASE_URL || '';
+  },
+  get supabaseAnonKey(): string {
+    return process.env.SUPABASE_ANON_KEY || '';
+  },
+  get supabaseServiceRoleKey(): string {
+    return process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  },
+
+  // --- Ghostfolio Internal (self-hosted on Railway) ---
+  get ghostfolioInternalUrl(): string {
+    return process.env.GHOSTFOLIO_INTERNAL_URL || process.env.GHOSTFOLIO_API_URL || '';
+  },
+  get ghostfolioAdminToken(): string {
+    return process.env.GHOSTFOLIO_ADMIN_TOKEN || '';
+  },
+
+  // --- Encryption ---
+  get encryptionKey(): string {
+    return process.env.ENCRYPTION_KEY || '';
+  },
+
+  // --- Database ---
+  get databaseUrl(): string {
+    return process.env.DATABASE_URL || '';
   }
 };

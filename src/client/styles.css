@@ -147,6 +147,49 @@ body {
   color: #ff3333;
 }
 
+/* ── Brokerage connect section ── */
+.brokerageSection {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  display: flex;
+  align-items: center;
+}
+
+.brokerageRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+#connectBrokerageBtn {
+  border: 1px solid #ff6600;
+  background: transparent;
+  color: #ff6600;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+#connectBrokerageBtn:hover {
+  background: #ff6600;
+  color: #000;
+}
+
+.brokerageStatus {
+  font-size: 11px;
+  color: #33ff33;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* ── Messages area ── */
 .messages {
   flex: 1;

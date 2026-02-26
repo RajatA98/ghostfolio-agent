@@ -1,0 +1,159 @@
+# Golden Set — getPerformance
+# 13 deterministic, binary pass/fail cases. Zero LLM judge cost.
+
+# ─── HAPPY PATH ─────────────────────────────────────────────────────
+
+- id: "gs-perf-001"
+  query: "How has my portfolio performed year to date?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "performance"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-perf-002"
+  query: "Show me my month-to-date returns."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-perf-003"
+  query: "What is my total return percentage for the last year?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "%"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-perf-004"
+  query: "Compare my year-to-date performance with my current allocation breakdown."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPortfolioSnapshot
+    - getPerformance
+  must_contain:
+    - "allocation"
+    - "performance"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-perf-005"
+  query: "How much money have I made or lost this year?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+
+# ─── EDGE CASES ─────────────────────────────────────────────────────
+
+- id: "gs-perf-006"
+  query: "How did I do recently?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain: []
+
+- id: "gs-perf-007"
+  query: "What were my top gainers and losers this month?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain: []
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "not available"
+    - "missing"
+
+- id: "gs-perf-008"
+  query: "Show me performance for the maximum time range."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-perf-009"
+  query: "How has my portfolio been doing lately?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain: []
+
+- id: "gs-perf-010"
+  query: "What was my return percentage since January?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "not available"
+    - "error"
+
+- id: "gs-perf-011"
+  query: "Show my portfolio performance for this week."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "gs-perf-012"
+  query: "How did my portfolio perform from 2026-01-01 to 2026-02-01?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-perf-013"
+  query: "What is my five year portfolio performance?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
