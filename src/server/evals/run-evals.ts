@@ -72,6 +72,11 @@ interface EvalCase {
   // Multi-turn conversation history (simulates prior turns)
   conversation_history?: { role: 'user' | 'assistant'; content: string }[];
 
+  // Operational bounds (latency, cost, iterations)
+  max_latency_ms?: number;
+  max_cost_usd?: number;
+  max_iterations?: number;
+
   // Labeled scenario metadata (ignored in checks, used for reporting)
   category?: string;
   subcategory?: string;
@@ -84,6 +89,17 @@ interface AllocationRow {
   percent: number;
 }
 
+interface LoopMeta {
+  iterations: number;
+  totalMs: number;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  terminationReason: string;
+}
+
 interface AgentResponse {
   answer: string;
   toolTrace: { tool: string; ok: boolean; ms: number; error?: string | null }[];
@@ -94,6 +110,7 @@ interface AgentResponse {
     totalValue?: { currency: string; amount: number };
   };
   warnings?: string[];
+  loopMeta?: LoopMeta;
 }
 
 interface CheckResult {
@@ -113,6 +130,7 @@ interface CaseResult {
   passed: boolean;
   checks: CheckResult[];
   actual?: ActualResponse | null;
+  loopMeta?: LoopMeta | null;
 }
 
 // ─── Pass/fail by code only (no LLM) ───────────────────────────────
@@ -234,6 +252,51 @@ function checkAllocationSum(data?: AgentResponse['data']): CheckResult {
     detail: ok
       ? `✓ allocation percents sum to ${sum.toFixed(2)}% (≈100 ±${ALLOCATION_SUM_TOLERANCE_PERCENT}%)`
       : `✗ allocation percents sum to ${sum.toFixed(2)}% — expected 100 ±${ALLOCATION_SUM_TOLERANCE_PERCENT}%`
+  };
+}
+
+// ─── Operational Checks (latency, cost, iterations) ─────────────────
+
+/** Approximate cost per token for Claude Sonnet. */
+const COST_PER_INPUT_TOKEN = 3.0 / 1_000_000;   // $3/MTok
+const COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000;  // $15/MTok
+
+function checkLatency(maxMs: number, actualMs: number): CheckResult {
+  const ok = actualMs <= maxMs;
+  return {
+    check: 'latency',
+    passed: ok,
+    detail: ok
+      ? `✓ latency ${actualMs}ms <= ${maxMs}ms`
+      : `✗ latency ${actualMs}ms > ${maxMs}ms — too slow`
+  };
+}
+
+function checkCost(
+  maxUsd: number,
+  tokenUsage: { inputTokens: number; outputTokens: number }
+): CheckResult {
+  const cost =
+    tokenUsage.inputTokens * COST_PER_INPUT_TOKEN +
+    tokenUsage.outputTokens * COST_PER_OUTPUT_TOKEN;
+  const ok = cost <= maxUsd;
+  return {
+    check: 'cost',
+    passed: ok,
+    detail: ok
+      ? `✓ cost $${cost.toFixed(4)} <= $${maxUsd.toFixed(4)}`
+      : `✗ cost $${cost.toFixed(4)} > $${maxUsd.toFixed(4)} — over budget`
+  };
+}
+
+function checkIterationCount(maxIter: number, actualIter: number): CheckResult {
+  const ok = actualIter <= maxIter;
+  return {
+    check: 'iterations',
+    passed: ok,
+    detail: ok
+      ? `✓ iterations ${actualIter} <= ${maxIter}`
+      : `✗ iterations ${actualIter} > ${maxIter} — loop ran too long`
   };
 }
 
@@ -399,6 +462,19 @@ async function runCase(
       }
     }
 
+    // ─── Operational checks (latency, cost, iterations) ─────────────
+    if (response.loopMeta) {
+      if (typeof evalCase.max_latency_ms === 'number') {
+        checks.push(checkLatency(evalCase.max_latency_ms, response.loopMeta.totalMs));
+      }
+      if (typeof evalCase.max_cost_usd === 'number') {
+        checks.push(checkCost(evalCase.max_cost_usd, response.loopMeta.tokenUsage));
+      }
+      if (typeof evalCase.max_iterations === 'number') {
+        checks.push(checkIterationCount(evalCase.max_iterations, response.loopMeta.iterations));
+      }
+    }
+
     const passed = checks.every((c) => c.passed);
     const snippet =
       answer.length > 140 ? answer.slice(0, 140).trim() + '…' : answer.trim();
@@ -407,7 +483,7 @@ async function runCase(
       confidence,
       answerSnippet: snippet.replace(/\s+/g, ' ').replace(/"/g, "'")
     };
-    return { id: evalCase.id, passed, checks, actual };
+    return { id: evalCase.id, passed, checks, actual, loopMeta: response.loopMeta ?? null };
   }
 
   // All retries exhausted — return failure
@@ -604,6 +680,24 @@ async function runEvalSet(): Promise<void> {
 
   // Per-tool pass rate
   printPerToolSummary(allCases, allResults);
+
+  // ─── Operational stats ──────────────────────────────────────────
+  const withMeta = allResults.filter((r) => r.loopMeta);
+  if (withMeta.length > 0) {
+    const latencies = withMeta.map((r) => r.loopMeta!.totalMs);
+    const costs = withMeta.map((r) => {
+      const u = r.loopMeta!.tokenUsage;
+      return u.inputTokens * COST_PER_INPUT_TOKEN + u.outputTokens * COST_PER_OUTPUT_TOKEN;
+    });
+    const iterations = withMeta.map((r) => r.loopMeta!.iterations);
+
+    console.log(`\n${DIM}Operational stats:${RESET}`);
+    console.log(`  Avg latency: ${(latencies.reduce((a, b) => a + b, 0) / latencies.length).toFixed(0)}ms`);
+    console.log(`  Max latency: ${Math.max(...latencies)}ms`);
+    console.log(`  Avg iterations: ${(iterations.reduce((a, b) => a + b, 0) / iterations.length).toFixed(1)}`);
+    console.log(`  Total cost: $${costs.reduce((a, b) => a + b, 0).toFixed(4)}`);
+    console.log(`  Avg cost/query: $${(costs.reduce((a, b) => a + b, 0) / costs.length).toFixed(4)}`);
+  }
 
   if (failures.length > 0) {
     console.log(`\n${RED}Failed cases:${RESET}`);

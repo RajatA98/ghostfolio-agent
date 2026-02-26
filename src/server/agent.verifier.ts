@@ -23,9 +23,16 @@ const VALUATION_KEYWORDS = [
   'based on cost'
 ];
 
+export interface SourceAttribution {
+  claim: string;
+  source: string;
+  verified: boolean;
+}
+
 export interface VerificationResult {
   warnings: string[];
   confidenceAdjustment: number;
+  attributions?: SourceAttribution[];
 }
 
 export function verifyAgentResponse({
@@ -38,6 +45,7 @@ export function verifyAgentResponse({
   const warnings: string[] = [];
   let confidenceAdjustment = 0;
 
+  // Existing: advice boundary check
   const adviceResult = checkAdviceBoundary(answer);
   warnings.push(...adviceResult.warnings);
   confidenceAdjustment += adviceResult.confidenceAdjustment;
@@ -46,19 +54,30 @@ export function verifyAgentResponse({
     | PortfolioSnapshotResult
     | undefined;
 
+  // Existing: allocation sum check
   if (snapshotResult?.allocationBySymbol) {
     const allocationResult = checkAllocationSum(snapshotResult.allocationBySymbol);
     warnings.push(...allocationResult.warnings);
     confidenceAdjustment += allocationResult.confidenceAdjustment;
   }
 
+  // Existing: valuation label check
   if (snapshotResult?.isPriceDataMissing) {
     const valuationResult = checkValuationLabel(answer);
     warnings.push(...valuationResult.warnings);
     confidenceAdjustment += valuationResult.confidenceAdjustment;
   }
 
-  return { warnings, confidenceAdjustment };
+  // NEW: Source attribution — verify numeric claims trace to tool results
+  const attrResult = checkSourceAttribution({ answer, toolResults });
+  warnings.push(...attrResult.warnings);
+
+  // NEW: Fact consistency — cross-validate key numeric claims
+  const factResult = checkFactConsistency({ answer, toolResults });
+  warnings.push(...factResult.warnings);
+  confidenceAdjustment += factResult.confidenceAdjustment;
+
+  return { warnings, confidenceAdjustment, attributions: attrResult.attributions };
 }
 
 function checkAdviceBoundary(answer: string): VerificationResult {
@@ -115,6 +134,108 @@ function checkValuationLabel(answer: string): VerificationResult {
       'Price data is missing for some holdings, but the response does not mention that values are based on cost basis. Users should be informed when market prices are unavailable.'
     );
     confidenceAdjustment += 0.1;
+  }
+
+  return { warnings, confidenceAdjustment };
+}
+
+// ─── Source Attribution ──────────────────────────────────────────────
+// Verifies that numeric claims in the response can be traced to tool results.
+
+function checkSourceAttribution({
+  answer,
+  toolResults
+}: {
+  answer: string;
+  toolResults: Map<string, unknown>;
+}): { attributions: SourceAttribution[]; warnings: string[] } {
+  const attributions: SourceAttribution[] = [];
+  const warnings: string[] = [];
+
+  if (toolResults.size === 0) {
+    return { attributions, warnings };
+  }
+
+  // Extract dollar claims from the answer (e.g., "$10,000", "$1,855.00")
+  const dollarPattern = /\$[\d,]+(?:\.\d{1,2})?/g;
+  const dollarClaims = answer.match(dollarPattern) ?? [];
+
+  // Build a single stringified version of all tool results for lookup
+  const resultStrings = new Map<string, string>();
+  for (const [toolName, result] of toolResults) {
+    resultStrings.set(toolName, JSON.stringify(result));
+  }
+
+  for (const claim of dollarClaims) {
+    const amount = Number(claim.replace(/[$,]/g, ''));
+    if (!Number.isFinite(amount) || amount === 0) continue;
+
+    let found = false;
+    let source = '';
+
+    for (const [toolName, resultStr] of resultStrings) {
+      // Check if the numeric value appears in the tool result
+      if (
+        resultStr.includes(String(amount)) ||
+        resultStr.includes(amount.toFixed(2))
+      ) {
+        found = true;
+        source = toolName;
+        break;
+      }
+    }
+
+    attributions.push({ claim, source, verified: found });
+  }
+
+  // Only warn if there are a manageable number of unverified claims
+  const unverified = attributions.filter((a) => !a.verified);
+  if (unverified.length > 0 && unverified.length <= 5) {
+    for (const attr of unverified) {
+      warnings.push(
+        `Numeric claim "${attr.claim}" could not be traced to any tool result — possible hallucination.`
+      );
+    }
+  }
+
+  return { attributions, warnings };
+}
+
+// ─── Fact Consistency ────────────────────────────────────────────────
+// Cross-validates key numeric assertions against tool results.
+
+function checkFactConsistency({
+  answer,
+  toolResults
+}: {
+  answer: string;
+  toolResults: Map<string, unknown>;
+}): { warnings: string[]; confidenceAdjustment: number } {
+  const warnings: string[] = [];
+  let confidenceAdjustment = 0;
+
+  const snapshot = toolResults.get('getPortfolioSnapshot') as
+    | PortfolioSnapshotResult
+    | undefined;
+
+  if (!snapshot?.totalValue) {
+    return { warnings, confidenceAdjustment };
+  }
+
+  // Check if the response claims a total value that differs significantly
+  const totalValueMatch = answer.match(
+    /total\s+(?:portfolio\s+)?value[^$]*\$([\d,]+(?:\.\d{1,2})?)/i
+  );
+  if (totalValueMatch) {
+    const claimed = Number(totalValueMatch[1].replace(/,/g, ''));
+    const actual = snapshot.totalValue.amount;
+    const tolerance = Math.max(actual * 0.02, 1); // 2% or $1 minimum
+    if (Math.abs(claimed - actual) > tolerance) {
+      warnings.push(
+        `Total value claim $${claimed.toFixed(2)} differs from tool result $${actual.toFixed(2)} by more than 2%.`
+      );
+      confidenceAdjustment += 0.15;
+    }
   }
 
   return { warnings, confidenceAdjustment };

@@ -5,6 +5,7 @@ import { buildSystemPrompt } from './agent.prompt';
 import {
   AgentChatRequest,
   AgentChatResponse,
+  AgentLoopMeta,
   AllocationChange,
   PortfolioSnapshotResult,
   ToolTraceRow,
@@ -145,58 +146,6 @@ export class AgentService {
           input_schema: td.input_schema as Anthropic.Tool.InputSchema
         }));
 
-      const call1Response = await client.messages.create({
-        model: agentConfig.anthropicModel,
-        max_tokens: agentConfig.maxTokens,
-        temperature: agentConfig.temperature,
-        system: systemPrompt,
-        messages,
-        tools: anthropicTools
-      });
-
-      const toolUseBlocks = call1Response.content.filter(
-        (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
-      );
-      const runnableToolUseBlocks: RunnableToolUse[] = toolUseBlocks.map((b) => ({
-        type: 'tool_use',
-        id: b.id,
-        name: b.name,
-        input: b.input
-      }));
-
-      const syntheticToolUseBlocks = this.buildSyntheticToolUseBlocks({
-        message: request.message,
-        existingToolNames: new Set(toolUseBlocks.map((b) => b.name)),
-        baseCurrency: userContext.baseCurrency,
-        conversationHistory: request.conversationHistory
-      });
-      const allToolUseBlocks = [...runnableToolUseBlocks, ...syntheticToolUseBlocks];
-
-      if (allToolUseBlocks.length === 0) {
-        const textContent = this.extractText(call1Response.content);
-        const verification = verifyAgentResponse({
-          answer: textContent,
-          toolResults
-        });
-
-        return {
-          answer: textContent,
-          data: {
-            valuationMethod: 'market',
-            asOf: null
-          },
-          toolTrace,
-          confidence: computeConfidence({
-            hasErrors: false,
-            isPriceDataMissing: false,
-            toolsSucceeded: 0,
-            toolsFailed: 0,
-            hasHoldings: true
-          }),
-          warnings: verification.warnings
-        };
-      }
-
       const toolContext: ToolContext = {
         userId: userContext.userId,
         baseCurrency: userContext.baseCurrency,
@@ -204,46 +153,165 @@ export class AgentService {
         jwt: userContext.jwt
       };
 
-      const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
+      // ─── Guardrail state ──────────────────────────────────────────
+      const loopStartMs = Date.now();
+      let iteration = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let terminationReason: AgentLoopMeta['terminationReason'] = 'end_turn';
       let tradeBlocked = false;
+      const circuitBreakerMap = new Map<string, number>();
+      let syntheticInjectedThisRequest = false;
+      let lastResponseContent: Anthropic.ContentBlock[] | null = null;
 
-      for (const toolUse of allToolUseBlocks) {
-        const startMs = Date.now();
-        const executor = this.toolRegistry.getExecutor(toolUse.name);
-
-        if (!executor) {
-          const errorMsg = `Unknown or disabled tool: ${toolUse.name}`;
-          toolsFailed++;
-          toolTrace.push({
-            tool: toolUse.name,
-            ok: false,
-            ms: Date.now() - startMs,
-            error: errorMsg
-          });
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({ error: errorMsg }),
-            is_error: true
-          });
-          continue;
+      // ─── ReAct loop: Thought → Action → Observation ───────────────
+      while (iteration < agentConfig.maxIterations) {
+        // Timeout check
+        if (Date.now() - loopStartMs > agentConfig.timeoutMs) {
+          terminationReason = 'timeout';
+          break;
         }
 
-        // ─── Trade confirmation guardrail ────────────────────────────
-        if (this.toolRegistry.needsConfirmation(toolUse.name)) {
-          const tradeInput = toolUse.input as Record<string, unknown>;
-          const guardrailResult = checkTradeConfirmation(
-            tradeInput as unknown as TradeGuardrailInput,
-            request.message,
-            request.conversationHistory
-          );
+        // Cost check
+        if (totalInputTokens + totalOutputTokens > agentConfig.costLimitTokens) {
+          terminationReason = 'cost_limit';
+          break;
+        }
 
-          if (!guardrailResult.allowed) {
-            tradeBlocked = true;
-            const blockedMsg = guardrailResult.cancelled
-              ? 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.'
-              : (guardrailResult.proposal ?? formatTradeProposal(tradeInput as unknown as TradeGuardrailInput));
+        // LLM call: suppress tools if trade was just blocked
+        const response = await client.messages.create({
+          model: agentConfig.anthropicModel,
+          max_tokens: agentConfig.maxTokens,
+          temperature: agentConfig.temperature,
+          system: systemPrompt,
+          messages,
+          ...(tradeBlocked ? {} : { tools: anthropicTools })
+        });
 
+        // Track tokens
+        totalInputTokens += response.usage?.input_tokens ?? 0;
+        totalOutputTokens += response.usage?.output_tokens ?? 0;
+
+        // Reset tradeBlocked for next iteration
+        tradeBlocked = false;
+
+        // Save content for post-loop text extraction
+        lastResponseContent = response.content;
+
+        // If stop_reason is end_turn (or max_tokens), the LLM is done
+        if (response.stop_reason !== 'tool_use') {
+          terminationReason = 'end_turn';
+          break;
+        }
+
+        // ─── stop_reason === 'tool_use' ─────────────────────────────
+        const toolUseBlocks = response.content.filter(
+          (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
+        );
+        const runnableToolUseBlocks: RunnableToolUse[] = toolUseBlocks.map((b) => ({
+          type: 'tool_use',
+          id: b.id,
+          name: b.name,
+          input: b.input
+        }));
+
+        // Synthetic tool injection: ONLY on first iteration
+        let syntheticToolUseBlocks: RunnableToolUse[] = [];
+        if (!syntheticInjectedThisRequest) {
+          syntheticToolUseBlocks = this.buildSyntheticToolUseBlocks({
+            message: request.message,
+            existingToolNames: new Set(toolUseBlocks.map((b) => b.name)),
+            baseCurrency: userContext.baseCurrency,
+            conversationHistory: request.conversationHistory
+          });
+          syntheticInjectedThisRequest = true;
+        }
+
+        const allToolUseBlocks = [...runnableToolUseBlocks, ...syntheticToolUseBlocks];
+
+        // If no tools to execute (shouldn't normally happen with stop_reason=tool_use)
+        if (allToolUseBlocks.length === 0) {
+          terminationReason = 'end_turn';
+          break;
+        }
+
+        // ─── Circuit breaker check ──────────────────────────────────
+        let circuitBroken = false;
+        for (const toolUse of allToolUseBlocks) {
+          const key = `${toolUse.name}:${this.hashArgs(toolUse.input)}`;
+          const count = (circuitBreakerMap.get(key) ?? 0) + 1;
+          circuitBreakerMap.set(key, count);
+          if (count >= agentConfig.circuitBreakerThreshold) {
+            circuitBroken = true;
+            break;
+          }
+        }
+        if (circuitBroken) {
+          terminationReason = 'circuit_breaker';
+          break;
+        }
+
+        // ─── Execute tools ──────────────────────────────────────────
+        const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
+
+        for (const toolUse of allToolUseBlocks) {
+          const startMs = Date.now();
+          const executor = this.toolRegistry.getExecutor(toolUse.name);
+
+          if (!executor) {
+            const errorMsg = `Unknown or disabled tool: ${toolUse.name}`;
+            toolsFailed++;
+            toolTrace.push({
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              error: errorMsg
+            });
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ error: errorMsg }),
+              is_error: true
+            });
+            continue;
+          }
+
+          // ─── Trade confirmation guardrail ──────────────────────────
+          if (this.toolRegistry.needsConfirmation(toolUse.name)) {
+            const tradeInput = toolUse.input as Record<string, unknown>;
+            const guardrailResult = checkTradeConfirmation(
+              tradeInput as unknown as TradeGuardrailInput,
+              request.message,
+              request.conversationHistory
+            );
+
+            if (!guardrailResult.allowed) {
+              tradeBlocked = true;
+              const blockedMsg = guardrailResult.cancelled
+                ? 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.'
+                : (guardrailResult.proposal ?? formatTradeProposal(tradeInput as unknown as TradeGuardrailInput));
+
+              toolTrace.push({
+                tool: toolUse.name,
+                ok: true,
+                ms: Date.now() - startMs
+              });
+              toolResultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: JSON.stringify({ blocked: true, message: blockedMsg })
+              });
+              continue;
+            }
+          }
+
+          try {
+            const result = await executor.execute(
+              toolUse.input as Record<string, unknown>,
+              toolContext
+            );
+            toolResults.set(toolUse.name, result);
+            toolsSucceeded++;
             toolTrace.push({
               tool: toolUse.name,
               ok: true,
@@ -252,112 +320,105 @@ export class AgentService {
             toolResultBlocks.push({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: JSON.stringify({ blocked: true, message: blockedMsg })
+              content: JSON.stringify(result)
             });
-            continue;
-          }
-        }
-
-        try {
-          const result = await executor.execute(
-            toolUse.input as Record<string, unknown>,
-            toolContext
-          );
-          toolResults.set(toolUse.name, result);
-          toolsSucceeded++;
-          toolTrace.push({
-            tool: toolUse.name,
-            ok: true,
-            ms: Date.now() - startMs
-          });
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(result)
-          });
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          toolsFailed++;
-          toolTrace.push({
-            tool: toolUse.name,
-            ok: false,
-            ms: Date.now() - startMs,
-            error: errorMsg
-          });
-          toolResultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify({
-              error: `Tool execution failed: ${errorMsg}`
-            }),
-            is_error: true
-          });
-        }
-      }
-
-      // ─── Auto-fetch portfolio after successful trade ──────────────
-      const postTradeBlocks: RunnableToolUse[] = [];
-      if (toolResults.has('logPaperTrade') && !toolResults.has('getPortfolioSnapshot')) {
-        const snapshotExecutor = this.toolRegistry.getExecutor('getPortfolioSnapshot');
-        if (snapshotExecutor) {
-          try {
-            const snapshotStartMs = Date.now();
-            const snapshotResult = await snapshotExecutor.execute({}, toolContext);
-            toolResults.set('getPortfolioSnapshot', snapshotResult);
-            toolsSucceeded++;
-
-            const snapshotToolUse: RunnableToolUse = {
-              type: 'tool_use',
-              id: `synthetic_postTrade_snapshot_0`,
-              name: 'getPortfolioSnapshot',
-              input: {}
-            };
-            postTradeBlocks.push(snapshotToolUse);
-
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            toolsFailed++;
             toolTrace.push({
-              tool: 'getPortfolioSnapshot',
-              ok: true,
-              ms: Date.now() - snapshotStartMs
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              error: errorMsg
             });
             toolResultBlocks.push({
               type: 'tool_result',
-              tool_use_id: snapshotToolUse.id,
-              content: JSON.stringify(snapshotResult)
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({
+                error: `Tool execution failed: ${errorMsg}`
+              }),
+              is_error: true
             });
-          } catch {
-            // Non-critical: trade already logged, just can't show updated portfolio
           }
         }
+
+        // ─── Auto-fetch portfolio after successful trade ────────────
+        const postTradeBlocks: RunnableToolUse[] = [];
+        if (toolResults.has('logPaperTrade') && !toolResults.has('getPortfolioSnapshot')) {
+          const snapshotExecutor = this.toolRegistry.getExecutor('getPortfolioSnapshot');
+          if (snapshotExecutor) {
+            try {
+              const snapshotStartMs = Date.now();
+              const snapshotResult = await snapshotExecutor.execute({}, toolContext);
+              toolResults.set('getPortfolioSnapshot', snapshotResult);
+              toolsSucceeded++;
+
+              const snapshotToolUse: RunnableToolUse = {
+                type: 'tool_use',
+                id: `synthetic_postTrade_snapshot_${iteration}`,
+                name: 'getPortfolioSnapshot',
+                input: {}
+              };
+              postTradeBlocks.push(snapshotToolUse);
+
+              toolTrace.push({
+                tool: 'getPortfolioSnapshot',
+                ok: true,
+                ms: Date.now() - snapshotStartMs
+              });
+              toolResultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: snapshotToolUse.id,
+                content: JSON.stringify(snapshotResult)
+              });
+            } catch {
+              // Non-critical: trade already logged, just can't show updated portfolio
+            }
+          }
+        }
+
+        // ─── Append assistant turn + tool results to messages ────────
+        const extraToolUseBlocks = [...syntheticToolUseBlocks, ...postTradeBlocks];
+        const assistantContent: Anthropic.ContentBlockParam[] =
+          extraToolUseBlocks.length
+            ? [
+                ...(response.content as unknown as Anthropic.ContentBlockParam[]),
+                ...(extraToolUseBlocks as Anthropic.ToolUseBlockParam[])
+              ]
+            : (response.content as unknown as Anthropic.ContentBlockParam[]);
+
+        messages.push({ role: 'assistant', content: assistantContent });
+        messages.push({ role: 'user', content: toolResultBlocks });
+
+        iteration++;
       }
 
-      const extraToolUseBlocks = [...syntheticToolUseBlocks, ...postTradeBlocks];
-      const assistantContentForCall2: Anthropic.ContentBlockParam[] =
-        extraToolUseBlocks.length
-          ? [
-              ...(call1Response.content as unknown as Anthropic.ContentBlockParam[]),
-              ...(extraToolUseBlocks as Anthropic.ToolUseBlockParam[])
-            ]
-          : (call1Response.content as unknown as Anthropic.ContentBlockParam[]);
+      // ─── Post-loop: check for max_iterations ──────────────────────
+      if (iteration >= agentConfig.maxIterations && terminationReason === 'end_turn') {
+        terminationReason = 'max_iterations';
+      }
 
-      const call2Messages: Anthropic.MessageParam[] = [
-        ...messages,
-        { role: 'assistant', content: assistantContentForCall2 },
-        { role: 'user', content: toolResultBlocks }
-      ];
+      // ─── Extract final answer ─────────────────────────────────────
+      let answer = '';
+      if (lastResponseContent) {
+        answer = this.extractText(lastResponseContent);
+      }
 
-      // When a trade was blocked by the guardrail, don't pass tools to call2.
-      // This forces the LLM to present the confirmation in text rather than
-      // trying to re-call logPaperTrade (which would truncate the response).
-      const call2Response = await client.messages.create({
-        model: agentConfig.anthropicModel,
-        max_tokens: agentConfig.maxTokens,
-        temperature: agentConfig.temperature,
-        system: systemPrompt,
-        messages: call2Messages,
-        ...(tradeBlocked ? {} : { tools: anthropicTools })
-      });
+      // If loop terminated early without a text response, generate one
+      if (!answer && terminationReason !== 'end_turn') {
+        const fallbackResponse = await client.messages.create({
+          model: agentConfig.anthropicModel,
+          max_tokens: agentConfig.maxTokens,
+          temperature: agentConfig.temperature,
+          system: systemPrompt,
+          messages
+          // No tools — force text response
+        });
+        totalInputTokens += fallbackResponse.usage?.input_tokens ?? 0;
+        totalOutputTokens += fallbackResponse.usage?.output_tokens ?? 0;
+        answer = this.extractText(fallbackResponse.content);
+      }
 
-      let answer = this.extractText(call2Response.content);
       answer = this.postProcessAnswer({
         answer,
         message: request.message,
@@ -400,7 +461,17 @@ export class AgentService {
         },
         toolTrace,
         confidence: finalConfidence,
-        warnings: verification.warnings
+        warnings: verification.warnings,
+        loopMeta: {
+          iterations: iteration,
+          totalMs: Date.now() - loopStartMs,
+          tokenUsage: {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            totalTokens: totalInputTokens + totalOutputTokens
+          },
+          terminationReason
+        }
       };
     };
 
@@ -417,6 +488,15 @@ export class AgentService {
         `I encountered an error while processing your request. Please try again. (${errorMsg})`,
         toolTrace
       );
+    }
+  }
+
+  /** Deterministic shallow hash for circuit-breaker dedup. */
+  private hashArgs(input: unknown): string {
+    try {
+      return JSON.stringify(input);
+    } catch {
+      return String(input);
     }
   }
 

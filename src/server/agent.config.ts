@@ -44,6 +44,23 @@ export const agentConfig = {
     return Number(process.env.AGENT_TEMPERATURE || 0.2);
   },
 
+  // --- Guardrails ---
+  get maxIterations(): number {
+    return Number(process.env.AGENT_MAX_ITERATIONS || 15);
+  },
+
+  get timeoutMs(): number {
+    return Number(process.env.AGENT_TIMEOUT_MS || 45000);
+  },
+
+  get costLimitTokens(): number {
+    return Number(process.env.AGENT_COST_LIMIT_TOKENS || 100000);
+  },
+
+  get circuitBreakerThreshold(): number {
+    return Number(process.env.AGENT_CIRCUIT_BREAKER_THRESHOLD || 3);
+  },
+
   get langsmithTracing(): boolean {
     return process.env.LANGSMITH_TRACING === 'true';
   },
