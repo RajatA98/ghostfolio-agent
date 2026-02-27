@@ -2,8 +2,8 @@
 builder = "DOCKERFILE"
 
 [deploy]
-startCommand = "npx prisma migrate deploy && npm run start"
+startCommand = "npm run start"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 120
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
