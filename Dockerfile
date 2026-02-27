@@ -3,7 +3,7 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl curl
 
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/

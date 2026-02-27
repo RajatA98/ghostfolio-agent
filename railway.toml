@@ -3,7 +3,6 @@ builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "npm run start"
-healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
