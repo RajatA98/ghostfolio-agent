@@ -1,4 +1,5 @@
 FROM node:22-alpine
+LABEL build.timestamp="2026-02-27"
 
 WORKDIR /app
 
