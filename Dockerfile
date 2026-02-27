@@ -30,4 +30,4 @@ COPY --from=builder /app/prisma ./prisma
 
 ENV NODE_ENV=production
 
-CMD ["node", "dist/server/main.js"]
+CMD ["node", "--unhandled-rejections=throw", "dist/server/main.js"]
