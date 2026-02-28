@@ -76,6 +76,7 @@ src/server/evals/
     edge_cases.eval.yaml
     adversarial.eval.yaml
     multi_step.eval.yaml
+    single_tool.eval.yaml
   run-evals.ts                ← TypeScript runner (not Python)
 ```
 
@@ -117,3 +118,33 @@ When writing or modifying `run-evals.ts`:
 - **NEVER** use token count as a quality proxy
 - **ALWAYS** add a new golden case when a production bug is found
 - **ALL** checks must be deterministic and binary — no LLM judge in golden sets
+
+---
+
+## Labeled Scenario Evals
+
+Labeled scenarios extend golden sets by categorizing test cases for **coverage mapping** — you can see which parts of the system are well-tested.
+
+### Golden Set vs Labeled Scenarios
+
+| Golden Set | Labeled Scenarios |
+|------------|-------------------|
+| 10–20 per tool, hand-curated | 30–100+ cases, can be generated |
+| Must all pass | Some failure OK for coverage tracking |
+| Run on every commit | Run on releases / targeted runs |
+| "Does it work?" | "Does it work for all types?" |
+| `golden_sets/*.eval.yaml` | `scenario_sets/*.eval.yaml` |
+| No labels | Requires `category`, `subcategory`, `difficulty` |
+
+### When to Add Which
+
+- **Golden case**: Production bug, regression risk, baseline correctness
+- **Labeled scenario**: Coverage gap, new query type, complexity/difficulty coverage
+
+### Labeled Scenario Structure
+
+Same 6 fields as golden + `category`, `subcategory`, `difficulty`. Use ID prefix `sc-` (e.g. `sc-st-001`).
+
+**Categories:** `adversarial`, `multi_tool`, `edge_case`, `single_tool`
+
+**Run:** `npm run evals:scenarios` | Filter: `--category adversarial` | `--subcategory advice_refusal` | `--difficulty straightforward`

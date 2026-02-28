@@ -20,11 +20,12 @@ export class GhostfolioPortfolioService {
 
   /**
    * Read the user's portfolio holdings from Ghostfolio.
+   * When jwt is provided (e.g. from request context), use it; otherwise resolve via authService.
    */
-  async getPortfolioData(userId: string): Promise<PortfolioReadResult> {
-    const jwt = await this.authService.getJwt(userId);
+  async getPortfolioData(userId: string, jwt?: string): Promise<PortfolioReadResult> {
+    const token = jwt ?? (await this.authService.getJwt(userId));
     const res = await fetch(`${this.baseUrl}/api/v1/portfolio/holdings`, {
-      headers: { Authorization: `Bearer ${jwt}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
 
     if (!res.ok) {
@@ -55,10 +56,10 @@ export class GhostfolioPortfolioService {
   /**
    * Get portfolio performance metrics.
    */
-  async getPerformance(userId: string): Promise<unknown> {
-    const jwt = await this.authService.getJwt(userId);
+  async getPerformance(userId: string, jwt?: string): Promise<unknown> {
+    const token = jwt ?? (await this.authService.getJwt(userId));
     const res = await fetch(`${this.baseUrl}/api/v1/portfolio/performance`, {
-      headers: { Authorization: `Bearer ${jwt}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
       const text = await res.text();
@@ -70,10 +71,10 @@ export class GhostfolioPortfolioService {
   /**
    * Get portfolio summary statistics.
    */
-  async getSummary(userId: string): Promise<unknown> {
-    const jwt = await this.authService.getJwt(userId);
+  async getSummary(userId: string, jwt?: string): Promise<unknown> {
+    const token = jwt ?? (await this.authService.getJwt(userId));
     const res = await fetch(`${this.baseUrl}/api/v1/portfolio/summary`, {
-      headers: { Authorization: `Bearer ${jwt}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
       const text = await res.text();
@@ -85,13 +86,13 @@ export class GhostfolioPortfolioService {
   /**
    * Get all activities/orders, optionally filtered by account.
    */
-  async getActivities(userId: string, accountId?: string): Promise<unknown> {
-    const jwt = await this.authService.getJwt(userId);
+  async getActivities(userId: string, accountId?: string, jwt?: string): Promise<unknown> {
+    const token = jwt ?? (await this.authService.getJwt(userId));
     const url = accountId
       ? `${this.baseUrl}/api/v1/order?accounts=${accountId}`
       : `${this.baseUrl}/api/v1/order`;
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${jwt}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
       const text = await res.text();

@@ -9,6 +9,8 @@ alwaysApply: false
 
 # Golden Set Evals
 
+**Golden set** = baseline correctness in `golden_sets/`. **Labeled scenarios** = coverage in `scenario_sets/` — see `labeled-scenario-evals.mdc`. Never put `category`, `subcategory`, or `difficulty` in golden set cases.
+
 ## Required Structure
 
 Every case MUST have all 6 fields. Never omit any.
@@ -74,6 +76,7 @@ src/server/evals/
     edge_cases.eval.yaml
     adversarial.eval.yaml
     multi_step.eval.yaml
+    single_tool.eval.yaml
   run-evals.ts
 ```
 

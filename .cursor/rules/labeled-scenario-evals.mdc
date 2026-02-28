@@ -1,0 +1,80 @@
+---
+description: Rules for generating labeled scenario evals (coverage mapping)
+globs:
+  - "src/server/evals/**"
+  - "**/*.eval.yaml"
+  - "**/run-evals.ts"
+alwaysApply: false
+---
+
+# Labeled Scenario Evals
+
+## Golden Set vs Labeled Scenarios
+
+| Golden Set | Labeled Scenarios |
+|------------|-------------------|
+| 10–20 cases per tool, hand-curated | 30–100+ cases, can be generated |
+| Must all pass (CI fails) | Some failure OK for coverage tracking |
+| Run on every commit | Run on releases / targeted runs |
+| "Does it work?" | "Does it work for all types?" |
+| `golden_sets/*.eval.yaml` | `scenario_sets/*.eval.yaml` |
+| No category/subcategory/difficulty | Requires `category`, `subcategory`, `difficulty` |
+
+- **Golden set** = baseline correctness in `golden_sets/` — see `golden-set-evals.mdc`
+- **Labeled scenarios** = coverage in `scenario_sets/` — this rule
+
+## When to Add Which
+
+- **Golden case**: Production bug, regression risk, baseline correctness
+- **Labeled scenario**: Coverage gap, new query type, complexity/difficulty coverage
+
+## Required Structure for Labeled Scenarios
+
+Same 6 fields as golden + `category`, `subcategory`, `difficulty`:
+
+```yaml
+- id: "sc-st-001"
+  query: "What's my allocation by symbol?"
+  category: single_tool
+  subcategory: snapshot_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+```
+
+## Ghostfolio Categories and Subcategories
+
+**Categories:** `adversarial`, `multi_tool`, `edge_case`, `single_tool`
+
+**Subcategories (examples):**
+- adversarial: `advice_refusal`, `prediction_refusal`, `prompt_injection`, `off_topic`
+- multi_tool: `snapshot_and_performance`, `snapshot_and_simulation`
+- edge_case: `missing_timeframe`, `long_query`, `non_english`, `minimal_query`
+- single_tool: `snapshot_only`, `performance_only`, `market_prices_only`, `simulation_only`, `portfolio_data_only`
+
+**Difficulty:** `straightforward`, `ambiguous`, `moderate`, `edge_case`
+
+## ID Prefix
+
+- Golden: `gs-` (e.g. `gs-prd-001`)
+- Scenario: `sc-` (e.g. `sc-st-001`, `sc-adv-001`)
+
+## File Layout
+
+```
+scenario_sets/
+  adversarial.eval.yaml
+  multi_step.eval.yaml
+  edge_cases.eval.yaml
+  single_tool.eval.yaml
+```
+
+**Run:** `npm run evals:scenarios` | `npm run evals:all`
+
+**Filter by label:** `npm run evals:scenarios -- --category adversarial` | `--subcategory advice_refusal` | `--difficulty straightforward`

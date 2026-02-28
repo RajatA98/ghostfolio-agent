@@ -9,9 +9,7 @@ export async function ghostfolioGet<T>({
 }): Promise<T> {
   const baseUrl = agentConfig.ghostfolioApiUrl.replace(/\/$/, '');
   const response = await fetch(`${baseUrl}${path}`, {
-    headers: {
-      Authorization: `Bearer ${jwt}`
-    }
+    headers: { Authorization: `Bearer ${jwt}` }
   });
 
   if (!response.ok) {

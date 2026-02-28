@@ -1,0 +1,240 @@
+# Labeled Scenarios — Single-Tool by Type
+# Tests coverage by tool: snapshot, performance, market prices, simulation, portfolio data.
+
+# ─── snapshot_only ──────────────────────────────────────────────────
+
+- id: "sc-st-001"
+  query: "What's my allocation by symbol?"
+  category: single_tool
+  subcategory: snapshot_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "I don't know"
+
+- id: "sc-st-002"
+  query: "What is my total portfolio value?"
+  category: single_tool
+  subcategory: snapshot_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "value"
+  must_not_contain:
+    - "I don't know"
+
+- id: "sc-st-003"
+  query: "Tell me about my portfolio."
+  category: single_tool
+  subcategory: snapshot_only
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't understand"
+
+# ─── performance_only ───────────────────────────────────────────────
+
+- id: "sc-st-004"
+  query: "How did I perform year to date?"
+  category: single_tool
+  subcategory: performance_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "performance"
+  must_not_contain:
+    - "I don't know"
+
+- id: "sc-st-005"
+  query: "Show me my returns for the last year."
+  category: single_tool
+  subcategory: performance_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-st-006"
+  query: "How is my portfolio doing?"
+  category: single_tool
+  subcategory: performance_only
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+
+# ─── market_prices_only ──────────────────────────────────────────────
+
+- id: "sc-st-007"
+  query: "What's the price of AAPL?"
+  category: single_tool
+  subcategory: market_prices_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getPortfolioSnapshot
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+
+- id: "sc-st-008"
+  query: "Get me the current price of VTI and BND."
+  category: single_tool
+  subcategory: market_prices_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getPortfolioSnapshot
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+
+- id: "sc-st-009"
+  query: "What are MSFT and GOOGL trading at?"
+  category: single_tool
+  subcategory: market_prices_only
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getPortfolioSnapshot
+      - getMarketPrices
+    expected_sources:
+      - getMarketPrices
+  must_contain: []
+  must_not_contain:
+    - "I recommend"
+
+# ─── simulation_only ────────────────────────────────────────────────
+
+- id: "sc-st-010"
+  query: "What if I bought $1000 of VTI?"
+  category: single_tool
+  subcategory: simulation_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain:
+    - "VTI"
+  must_not_contain:
+    - "I can't simulate"
+
+- id: "sc-st-011"
+  query: "Simulate selling $500 of my largest holding."
+  category: single_tool
+  subcategory: simulation_only
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-st-012"
+  query: "What would my allocation look like if I added $2000 in bonds?"
+  category: single_tool
+  subcategory: simulation_only
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - simulateAllocationChange
+  must_contain: []
+  must_not_contain:
+    - "I can't simulate"
+
+# ─── portfolio_data_only ────────────────────────────────────────────
+
+- id: "sc-st-013"
+  query: "Show my holdings from getPortfolioData."
+  category: single_tool
+  subcategory: portfolio_data_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "holdings"
+  must_not_contain:
+    - "I don't know"
+
+- id: "sc-st-014"
+  query: "Use getPortfolioData with type summary and show my net worth."
+  category: single_tool
+  subcategory: portfolio_data_only
+  difficulty: straightforward
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "summary"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-st-015"
+  query: "List my latest portfolio activities."
+  category: single_tool
+  subcategory: portfolio_data_only
+  difficulty: ambiguous
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain: []
+  must_not_contain:
+    - "I don't know"

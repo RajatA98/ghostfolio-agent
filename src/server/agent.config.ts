@@ -1,4 +1,13 @@
 export const agentConfig = {
+  get authMode(): 'supabase' | 'ghostfolio_shared' {
+    const mode = process.env.AGENT_AUTH_MODE || 'supabase';
+    return mode === 'ghostfolio_shared' ? 'ghostfolio_shared' : 'supabase';
+  },
+
+  get singleTenantFallback(): boolean {
+    return process.env.AGENT_SINGLE_TENANT === 'true';
+  },
+
   get ghostfolioApiUrl(): string {
     return process.env.GHOSTFOLIO_API_URL || '';
   },
@@ -9,6 +18,14 @@ export const agentConfig = {
 
   get enableExternalMarketData(): boolean {
     return process.env.AGENT_ENABLE_MARKET === 'true';
+  },
+
+  get finnhubApiKey(): string {
+    return process.env.FINNHUB_API_KEY || '';
+  },
+
+  get enableNewsData(): boolean {
+    return process.env.AGENT_ENABLE_NEWS === 'true';
   },
 
   get valuationFallback(): 'cost_basis' | 'error' {

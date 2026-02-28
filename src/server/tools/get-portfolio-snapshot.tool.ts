@@ -8,7 +8,8 @@ import {
   ValuationMethod
 } from '../agent.types';
 import { ghostfolioGet } from './http';
-import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
+import { BaseTool } from './base-tool';
+import { AgentToolDefinition, ToolContext } from './tool-registry';
 
 interface PortfolioPositionLike {
   symbol: string;
@@ -26,11 +27,11 @@ interface PortfolioDetailsLike {
   hasErrors?: boolean;
 }
 
-export class GetPortfolioSnapshotTool implements ToolExecutor {
+export class GetPortfolioSnapshotTool extends BaseTool {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'getPortfolioSnapshot',
     description:
-      'Retrieves the current portfolio holdings with allocations, values, and performance metrics. Use this tool to answer questions about portfolio composition, allocation breakdown, total value, and individual holding details.',
+      'Retrieves one portfolio snapshot: holdings, allocations, and total value for a time range. Single responsibility. Idempotent and safe to retry. Returns structured result; on API failure returns minimal snapshot with reasonIfUnavailable set.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -45,7 +46,7 @@ export class GetPortfolioSnapshotTool implements ToolExecutor {
     }
   };
 
-  public async execute(
+  protected async run(
     input: Record<string, unknown>,
     context: ToolContext
   ): Promise<PortfolioSnapshotResult> {
@@ -54,8 +55,36 @@ export class GetPortfolioSnapshotTool implements ToolExecutor {
       path: `/api/v1/portfolio/details?range=${encodeURIComponent(dateRange)}`,
       jwt: context.jwt
     });
-
     return this.mapToSnapshot(result, context.baseCurrency);
+  }
+
+  protected onError(
+    error: unknown,
+    _input: Record<string, unknown>,
+    context: ToolContext
+  ): PortfolioSnapshotResult {
+    const message = error instanceof Error ? error.message : String(error);
+    const now = new Date().toISOString().split('T')[0];
+    return this.emptySnapshot(context.baseCurrency, now, message);
+  }
+
+  private emptySnapshot(
+    baseCurrency: string,
+    now: string,
+    reasonIfUnavailable: string
+  ): PortfolioSnapshotResult {
+    return {
+      accountId: 'default',
+      timeframe: { start: '', end: now },
+      valuationMethod: 'cost_basis',
+      asOf: null,
+      totalValue: { currency: baseCurrency, amount: 0 },
+      allocationBySymbol: [],
+      allocationByAssetClass: [],
+      holdings: [],
+      isPriceDataMissing: true,
+      reasonIfUnavailable
+    };
   }
 
   private mapToSnapshot(

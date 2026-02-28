@@ -1,12 +1,13 @@
 import { execSync } from 'node:child_process';
 import { MarketPricesResult } from '../agent.types';
-import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
+import { BaseTool } from './base-tool';
+import { AgentToolDefinition, ToolContext } from './tool-registry';
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 
 /** In-memory cache: symbol → { price, currency, ts } */
 const priceCache = new Map<string, { price: number; currency: string; ts: number }>();
-const CACHE_TTL_MS = 60_000; // 1 minute
+const CACHE_TTL_MS = 300_000; // 5 minutes
 
 /** Yahoo Finance uses BTC-USD, ETH-USD etc. for crypto. */
 const CRYPTO_TO_YAHOO: Record<string, string> = {
@@ -67,11 +68,11 @@ function fetchYahooQuote(
   }
 }
 
-export class GetMarketPricesTool implements ToolExecutor {
+export class GetMarketPricesTool extends BaseTool {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'getMarketPrices',
     description:
-      'Retrieves current market prices for stocks and cryptocurrencies. Supports stock tickers (e.g. AAPL, MSFT, GOOGL) and crypto symbols (e.g. BTC, ETH, SOL or BTC-USD, ETH-USD).',
+      'Fetches current market prices for the given symbols only. Single responsibility: price lookup. Idempotent and safe to retry. Source: Yahoo Finance (stocks and crypto). Returns structured rows; symbols that fail to resolve have price 0 and source "unavailable".',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -86,7 +87,7 @@ export class GetMarketPricesTool implements ToolExecutor {
     }
   };
 
-  public async execute(
+  protected async run(
     input: Record<string, unknown>,
     _context: ToolContext
   ): Promise<MarketPricesResult> {

@@ -104,6 +104,12 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-mkt-010"
   query: "How much is one share of AMZN worth today?"

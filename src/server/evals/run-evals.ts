@@ -69,6 +69,9 @@ interface EvalCase {
   if_market_enabled?: MarketModeOverrides;
   if_market_disabled?: MarketModeOverrides;
 
+  // Conditional overrides based on AGENT_ENABLE_NEWS
+  if_news_enabled?: MarketModeOverrides;
+
   // Multi-turn conversation history (simulates prior turns)
   conversation_history?: { role: 'user' | 'assistant'; content: string }[];
 
@@ -304,20 +307,40 @@ function checkIterationCount(maxIter: number, actualIter: number): CheckResult {
 
 function resolveMarketMode(cases: EvalCase[]): EvalCase[] {
   const marketEnabled = process.env.AGENT_ENABLE_MARKET === 'true';
-  const modeLabel = marketEnabled ? 'enabled' : 'disabled';
-  console.log(`  Market mode: ${modeLabel} (AGENT_ENABLE_MARKET=${process.env.AGENT_ENABLE_MARKET ?? 'unset'})\n`);
+  const newsEnabled = process.env.AGENT_ENABLE_NEWS === 'true';
+  const marketLabel = marketEnabled ? 'enabled' : 'disabled';
+  const newsLabel = newsEnabled ? 'enabled' : 'disabled';
+  console.log(`  Market mode: ${marketLabel} (AGENT_ENABLE_MARKET=${process.env.AGENT_ENABLE_MARKET ?? 'unset'})`);
+  console.log(`  News mode: ${newsLabel} (AGENT_ENABLE_NEWS=${process.env.AGENT_ENABLE_NEWS ?? 'unset'})\n`);
 
   return cases.map((c) => {
-    const overrides = marketEnabled ? c.if_market_enabled : c.if_market_disabled;
-    if (!overrides) return c;
+    let resolved = { ...c };
 
-    return {
-      ...c,
-      expected_tools: overrides.expected_tools ?? c.expected_tools,
-      expected_sources: overrides.expected_sources ?? c.expected_sources,
-      must_contain: overrides.must_contain ?? c.must_contain,
-      must_not_contain: overrides.must_not_contain ?? c.must_not_contain
-    };
+    // Apply market mode overrides
+    const marketOverrides = marketEnabled ? c.if_market_enabled : c.if_market_disabled;
+    if (marketOverrides) {
+      resolved = {
+        ...resolved,
+        expected_tools: marketOverrides.expected_tools ?? resolved.expected_tools,
+        expected_sources: marketOverrides.expected_sources ?? resolved.expected_sources,
+        must_contain: marketOverrides.must_contain ?? resolved.must_contain,
+        must_not_contain: marketOverrides.must_not_contain ?? resolved.must_not_contain
+      };
+    }
+
+    // Apply news mode overrides
+    if (newsEnabled && c.if_news_enabled) {
+      const newsOverrides = c.if_news_enabled;
+      resolved = {
+        ...resolved,
+        expected_tools: newsOverrides.expected_tools ?? resolved.expected_tools,
+        expected_sources: newsOverrides.expected_sources ?? resolved.expected_sources,
+        must_contain: newsOverrides.must_contain ?? resolved.must_contain,
+        must_not_contain: newsOverrides.must_not_contain ?? resolved.must_not_contain
+      };
+    }
+
+    return resolved;
   });
 }
 
@@ -350,12 +373,18 @@ async function runCase(
       await sleep(delayMs);
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${jwt}`
+    };
+    const ghostfolioUserId = process.env.EVAL_GHOSTFOLIO_USER_ID || process.env.GHOSTFOLIO_USER_ID || '';
+    if (ghostfolioUserId) {
+      headers['x-ghostfolio-user-id'] = ghostfolioUserId;
+    }
+
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${jwt}`
-      },
+      headers,
       body: JSON.stringify({
         message: evalCase.query,
         ...(evalCase.conversation_history?.length
@@ -389,17 +418,38 @@ async function runCase(
     const { answer, toolTrace, confidence, data } = response;
     const checks: CheckResult[] = [];
 
+    // Detect unavailable data early: if allow_unavailable and (tools failed OR
+    // answer indicates unavailability), skip must_contain / must_not_contain
+    const normalizedForUnavail = normalizeForAssert(answer);
+    const toolTraceFailed = evalCase.expected_tools.some((t) => {
+      const trace = toolTrace.find((tr) => tr.tool === t);
+      return !trace || !trace.ok;
+    });
+    const answerIndicatesUnavailable =
+      evalCase.if_unavailable_must_contain?.length
+        ? evalCase.if_unavailable_must_contain.some((p) =>
+            normalizedForUnavail.includes(normalizeForAssert(p))
+          )
+        : false;
+    const dataUnavailable =
+      evalCase.allow_unavailable === true &&
+      (toolTraceFailed || answerIndicatesUnavailable);
+
     // 1. Tool selection
     checks.push(...checkToolSelection(evalCase.expected_tools, toolTrace));
 
     // 2. Source citation
     checks.push(...checkSourceCitation(evalCase.expected_sources, toolTrace));
 
-    // 3. Content validation
-    checks.push(...checkContentValidation(evalCase.must_contain, answer));
+    // 3. Content validation (skip when data unavailable)
+    if (!dataUnavailable) {
+      checks.push(...checkContentValidation(evalCase.must_contain, answer));
+    }
 
-    // 4. Negative validation
-    checks.push(...checkNegativeValidation(evalCase.must_not_contain, answer));
+    // 4. Negative validation (skip when data unavailable)
+    if (!dataUnavailable) {
+      checks.push(...checkNegativeValidation(evalCase.must_not_contain, answer));
+    }
 
     // ─── Extended checks ─────────────────────────────────────────────
 
@@ -415,8 +465,8 @@ async function runCase(
       });
     }
 
-    // Structural validators (mustSatisfy)
-    if (evalCase.must_satisfy?.length) {
+    // Structural validators (mustSatisfy — skip when data unavailable)
+    if (!dataUnavailable && evalCase.must_satisfy?.length) {
       for (const name of evalCase.must_satisfy) {
         if (name === 'allocationPercentsSumApprox100') {
           checks.push(checkAllocationSum(data));
@@ -424,8 +474,8 @@ async function runCase(
       }
     }
 
-    // Valuation method conditional (source citation refinement)
-    if (evalCase.if_valuation_method && data?.valuationMethod) {
+    // Valuation method conditional (source citation refinement — skip when data unavailable)
+    if (!dataUnavailable && evalCase.if_valuation_method && data?.valuationMethod) {
       const branch = evalCase.if_valuation_method[data.valuationMethod];
       if (branch?.must_contain?.length) {
         checks.push(
@@ -439,27 +489,18 @@ async function runCase(
     }
 
     // Unavailable data fallback (deterministic: same toolTrace + answer → same result)
-    if (
-      evalCase.allow_unavailable &&
-      evalCase.if_unavailable_must_contain?.length
-    ) {
-      const toolsFailed = evalCase.expected_tools.some((t) => {
-        const trace = toolTrace.find((tr) => tr.tool === t);
-        return !trace || !trace.ok;
+    if (dataUnavailable && evalCase.if_unavailable_must_contain?.length) {
+      const normalizedAnswer = normalizeForAssert(answer);
+      const hasPhrase = evalCase.if_unavailable_must_contain.some((p) =>
+        normalizedAnswer.includes(normalizeForAssert(p))
+      );
+      checks.push({
+        check: 'content_validation',
+        passed: hasPhrase,
+        detail: hasPhrase
+          ? `✓ data unavailable and answer explains why`
+          : `✗ data unavailable but answer doesn't mention: ${evalCase.if_unavailable_must_contain.join(', ')}`
       });
-      if (toolsFailed) {
-        const normalizedAnswer = normalizeForAssert(answer);
-        const hasPhrase = evalCase.if_unavailable_must_contain.some((p) =>
-          normalizedAnswer.includes(normalizeForAssert(p))
-        );
-        checks.push({
-          check: 'content_validation',
-          passed: hasPhrase,
-          detail: hasPhrase
-            ? `✓ data unavailable and answer explains why`
-            : `✗ data unavailable but answer doesn't mention: ${evalCase.if_unavailable_must_contain.join(', ')}`
-        });
-      }
     }
 
     // ─── Operational checks (latency, cost, iterations) ─────────────
@@ -555,6 +596,36 @@ function printPerToolSummary(
   }
 }
 
+function printCoverageByCategory(
+  cases: EvalCase[],
+  results: CaseResult[]
+): void {
+  const labeled = cases.filter((c) => c.category != null);
+  if (labeled.length === 0) return;
+
+  const byGroup = new Map<string, { passed: number; failed: number }>();
+  for (let i = 0; i < cases.length; i++) {
+    const c = cases[i];
+    if (c.category == null) continue;
+    const key = c.subcategory ? `${c.category}/${c.subcategory}` : c.category;
+    if (!byGroup.has(key)) byGroup.set(key, { passed: 0, failed: 0 });
+    const stats = byGroup.get(key)!;
+    if (results[i].passed) stats.passed++;
+    else stats.failed++;
+  }
+
+  if (byGroup.size > 0) {
+    console.log(`\n${DIM}Coverage by category/subcategory:${RESET}`);
+    for (const [group, stats] of Array.from(byGroup.entries()).sort()) {
+      const total = stats.passed + stats.failed;
+      const rate = total > 0 ? ((stats.passed / total) * 100).toFixed(0) : '0';
+      const color = stats.failed > 0 ? RED : GREEN;
+      const bar = '█'.repeat(Math.round((stats.passed / total) * 20)) + '░'.repeat(20 - Math.round((stats.passed / total) * 20));
+      console.log(`  ${color}${group}${RESET}: ${stats.passed}/${total} (${rate}%) ${bar}`);
+    }
+  }
+}
+
 // ─── Failed cases persistence (for --retry-failed) ────────────────────
 
 const EVALS_LAST_FAILED_FILE = path.join(__dirname, '.evals-last-failed.json');
@@ -601,6 +672,13 @@ function hasRetryFailedFlag(): boolean {
   return process.argv.includes('--retry-failed');
 }
 
+function parseFilterArg(name: string): string | null {
+  const eq = process.argv.find((arg) => arg.startsWith(`--${name}=`));
+  if (eq) return eq.split('=')[1]?.trim() || null;
+  const idx = process.argv.indexOf(`--${name}`);
+  return idx >= 0 ? process.argv[idx + 1]?.trim() ?? null : null;
+}
+
 async function runEvalSet(): Promise<void> {
   const retryFailed = hasRetryFailedFlag();
   let set = parseEvalSetArg();
@@ -642,6 +720,19 @@ async function runEvalSet(): Promise<void> {
 
   let allCases = resolveMarketMode([...goldenCases, ...sanityCases, ...scenarioCases]);
 
+  // Category/subcategory/difficulty filters (labeled scenarios only)
+  const categoryFilter = parseFilterArg('category');
+  const subcategoryFilter = parseFilterArg('subcategory');
+  const difficultyFilter = parseFilterArg('difficulty');
+  if (categoryFilter || subcategoryFilter || difficultyFilter) {
+    allCases = allCases.filter((c) => {
+      if (categoryFilter && c.category !== categoryFilter) return false;
+      if (subcategoryFilter && c.subcategory !== subcategoryFilter) return false;
+      if (difficultyFilter && c.difficulty !== difficultyFilter) return false;
+      return true;
+    });
+  }
+
   if (retryFailed && retryFailedIds) {
     const idSet = new Set(retryFailedIds);
     allCases = allCases.filter((c) => idSet.has(c.id));
@@ -660,6 +751,10 @@ async function runEvalSet(): Promise<void> {
   console.log(`\n🏆 ${setLabel}: ${allCases.length} cases loaded`);
   if (retryFailed) {
     console.log(`   (retrying failed cases from last run only)`);
+  }
+  if (categoryFilter || subcategoryFilter || difficultyFilter) {
+    const filterParts = [categoryFilter, subcategoryFilter, difficultyFilter].filter(Boolean);
+    console.log(`   (filter: ${filterParts.join(', ')})`);
   }
   if (set === 'all') {
     console.log(`   (${goldenCases.length} golden + ${scenarioCases.length} scenarios)`);
@@ -749,6 +844,11 @@ async function runEvalSet(): Promise<void> {
 
   // Per-tool pass rate
   printPerToolSummary(allCases, allResults);
+
+  // Coverage by category (labeled scenarios)
+  if (set === 'scenarios' || set === 'all') {
+    printCoverageByCategory(allCases, allResults);
+  }
 
   // ─── Operational stats ──────────────────────────────────────────
   const withMeta = allResults.filter((r) => r.loopMeta);

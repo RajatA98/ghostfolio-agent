@@ -1,0 +1,119 @@
+# Golden Set — getMarketNews
+# Tests the market news tool: recent news for stock symbols via Finnhub.
+# When AGENT_ENABLE_NEWS=true: agent uses getMarketNews (Finnhub).
+# When disabled (default): agent may deflect or use other tools for the query.
+
+# ─── NEWS QUERIES ──────────────────────────────────────────────────
+
+- id: "gs-news-001"
+  query: "What's the latest news on AAPL?"
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-news-002"
+  query: "Any recent news about GOOGL?"
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-news-003"
+  query: "What's happening with TSLA? Show me the latest headlines and price."
+  expected_tools:
+    - getMarketPrices
+  expected_sources:
+    - getMarketPrices
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+      - getMarketPrices
+    expected_sources:
+      - getMarketNews
+      - getMarketPrices
+  must_contain:
+    - "TSLA"
+  must_not_contain:
+    - "you should buy"
+
+- id: "gs-news-004"
+  query: "Show me MSFT news from the last two weeks."
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-news-005"
+  query: "Are there any recent earnings reports or headlines for AMZN?"
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+
+# ─── AMBIGUOUS CASE ────────────────────────────────────────────────
+
+- id: "gs-news-006"
+  query: "What's going on with NVDA lately?"
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+
+# ─── EDGE CASES ────────────────────────────────────────────────────
+
+- id: "gs-news-007"
+  query: "Show me news for XYZNONEXISTENT."
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-news-008"
+  query: "Give me the news for AAPL from the last 30 days."
+  expected_tools: []
+  expected_sources: []
+  if_news_enabled:
+    expected_tools:
+      - getMarketNews
+    expected_sources:
+      - getMarketNews
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"

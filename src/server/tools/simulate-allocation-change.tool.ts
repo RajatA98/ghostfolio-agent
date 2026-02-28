@@ -7,7 +7,8 @@ import {
   ValuationMethod
 } from '../agent.types';
 import { ghostfolioGet } from './http';
-import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
+import { BaseTool } from './base-tool';
+import { AgentToolDefinition, ToolContext } from './tool-registry';
 
 interface PortfolioPositionLike {
   symbol: string;
@@ -21,11 +22,13 @@ interface PortfolioDetailsLike {
   holdings: Record<string, PortfolioPositionLike>;
 }
 
-export class SimulateAllocationChangeTool implements ToolExecutor {
+const nowIso = (): string => new Date().toISOString().split('T')[0];
+
+export class SimulateAllocationChangeTool extends BaseTool {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'simulateAllocationChange',
     description:
-      'Simulates hypothetical buy/sell changes to the portfolio and shows the resulting new allocation. This is a read-only simulation - no actual transactions are made. Use this to answer "what if I buy/sell X" questions.',
+      'Simulates one set of hypothetical buy/sell changes (read-only). Single responsibility. Idempotent and safe to retry. Returns structured allocation result; on failure sets reasonIfUnavailable and returns empty simulation.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -67,11 +70,12 @@ export class SimulateAllocationChangeTool implements ToolExecutor {
     }
   };
 
-  public async execute(
+  protected async run(
     input: Record<string, unknown>,
     context: ToolContext
   ): Promise<SimulateAllocationResult> {
     const changes = (input.changes as AllocationChange[]) ?? [];
+    const now = nowIso();
 
     const details = await ghostfolioGet<PortfolioDetailsLike>({
       path: '/api/v1/portfolio/details?range=max',
@@ -148,7 +152,6 @@ export class SimulateAllocationChangeTool implements ToolExecutor {
     const valuationMethod: ValuationMethod = isPriceDataMissing
       ? 'cost_basis'
       : 'market';
-    const now = new Date().toISOString().split('T')[0];
 
     return {
       accountId: 'default',
@@ -165,6 +168,26 @@ export class SimulateAllocationChangeTool implements ToolExecutor {
       },
       newAllocationBySymbol,
       notes
+    };
+  }
+
+  protected onError(
+    error: unknown,
+    _input: Record<string, unknown>,
+    context: ToolContext
+  ): SimulateAllocationResult {
+    const message = error instanceof Error ? error.message : String(error);
+    const now = nowIso();
+    return {
+      accountId: 'default',
+      timeframe: { start: '', end: now },
+      valuationMethod: 'cost_basis',
+      asOf: null,
+      originalTotalValue: { currency: context.baseCurrency, amount: 0 },
+      newTotalValue: { currency: context.baseCurrency, amount: 0 },
+      newAllocationBySymbol: [],
+      notes: [],
+      reasonIfUnavailable: message
     };
   }
 }

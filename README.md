@@ -23,6 +23,13 @@ Standalone AI agent service and frontend for Ghostfolio.
 - Fetches portfolio data from Ghostfolio over HTTP using the user JWT
 - Serves a minimal standalone frontend
 
+## Auth modes
+
+- `AGENT_AUTH_MODE=supabase` (default): standalone mode using Supabase auth + per-user Ghostfolio provisioning.
+- `AGENT_AUTH_MODE=ghostfolio_shared`: embedded mode for Ghostfolio forks where the host app forwards Ghostfolio JWT and user id headers.
+
+For multi-user environments, keep `AGENT_SINGLE_TENANT=false` so failed provisioning does not fall back to a shared `GHOSTFOLIO_JWT`.
+
 ## Quick start
 
 1. Copy `.env.template` to `.env` and fill in values.
@@ -54,6 +61,12 @@ Set `GHOSTFOLIO_API_URL` in `.env` to your Ghostfolio instance URL.
 - **Access token**: In Ghostfolio go to Settings → Account, create/copy your access token, paste it in the agent UI → **Connect** (the agent exchanges it for a JWT).
 
 If your agent UI is served from a different origin (e.g. another domain), set `CORS_ORIGIN` in `.env` to that origin so the browser can send the JWT to the agent.
+
+## Embed in a Ghostfolio fork
+
+Use this repo as a submodule and run it in shared-auth mode so agent and Ghostfolio use the same user/session context:
+
+- `docs/ghostfolio-subrepo-integration.md`
 
 ## Evaluation
 

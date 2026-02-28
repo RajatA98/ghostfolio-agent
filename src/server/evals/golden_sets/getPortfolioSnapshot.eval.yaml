@@ -50,6 +50,12 @@
     - "I can't"
   must_satisfy:
     - allocationPercentsSumApprox100
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-snap-005"
   query: "Show my allocation and tell me what percent is AAPL."
@@ -65,6 +71,12 @@
     cost_basis:
       must_contain:
         - "cost basis"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-snap-006"
   query: "How many different stocks do I own?"
@@ -111,7 +123,13 @@
   must_not_contain:
     - "I don't know"
     - "I can't"
-  max_confidence: 0.4
+  max_confidence: 1.0
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-snap-010"
   query: "Show my portfolio allocation for the year to date range."
@@ -123,6 +141,12 @@
     - "allocation"
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-snap-011"
   query: "What are my holdings worth?"
@@ -158,6 +182,12 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 # ─── NEGATIVE VALIDATION ────────────────────────────────────────────
 

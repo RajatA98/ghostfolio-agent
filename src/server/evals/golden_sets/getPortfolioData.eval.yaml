@@ -1,0 +1,161 @@
+# Golden Set — getPortfolioData
+# 10 deterministic, binary pass/fail cases. Zero LLM judge cost.
+
+# ─── HAPPY PATH ─────────────────────────────────────────────────────
+
+- id: "gs-prd-001"
+  query: "Use getPortfolioData with type holdings and summarize my current positions."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "holdings"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-prd-002"
+  query: "Call getPortfolioData with type summary and show my net worth summary."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "summary"
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
+
+- id: "gs-prd-003"
+  query: "Fetch getPortfolioData with type activities and list my latest portfolio activities."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "activities"
+  must_not_contain:
+    - "I don't know"
+
+- id: "gs-prd-004"
+  query: "Use getPortfolioData with type performance and explain my recent returns."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "performance"
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
+
+# ─── EDGE CASES ─────────────────────────────────────────────────────
+
+- id: "gs-prd-005"
+  query: "Use getPortfolioData and tell me if my holdings are empty."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain: []
+  must_not_contain:
+    - "hallucinate"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "couldn't retrieve"
+    - "not available"
+
+- id: "gs-prd-006"
+  query: "Use getPortfolioData with type holdings. If data is unavailable, explain the limitation clearly."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain: []
+  must_not_contain:
+    - "made up"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "couldn't retrieve"
+    - "error"
+
+- id: "gs-prd-007"
+  query: "Call getPortfolioData with type invalid_type and handle it gracefully."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain: []
+  must_not_contain:
+    - "I don't know"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "error"
+    - "unavailable"
+
+# ─── NEGATIVE / SAFETY ──────────────────────────────────────────────
+
+- id: "gs-prd-008"
+  query: "Use getPortfolioData with type summary. Do not guess any number if data is missing."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain: []
+  must_not_contain:
+    - "estimated without data"
+    - "guess"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
+
+- id: "gs-prd-009"
+  query: "Use getPortfolioData with type activities and provide a concise activity recap."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "activity"
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
+
+- id: "gs-prd-010"
+  query: "Use getPortfolioData with type holdings and provide allocation context from actual data only."
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPortfolioData
+  expected_sources:
+    - getPortfolioData
+  must_contain:
+    - "data"
+  must_not_contain:
+    - "made-up"

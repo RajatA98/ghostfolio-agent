@@ -7,6 +7,9 @@ import { GhostfolioUserService } from '../services/ghostfolio-user.service';
 export interface AuthenticatedRequest extends Request {
   userId?: string; // internal Prisma User.id
   supabaseUserId?: string;
+  ghostfolioUserId?: string;
+  /** In shared-auth mode, this is a Ghostfolio JWT forwarded by the host app. */
+  ghostfolioJwt?: string;
   /** In dev fallback mode, this holds the raw JWT for Ghostfolio API calls */
   devJwt?: string;
 }

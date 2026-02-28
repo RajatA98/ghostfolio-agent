@@ -1,6 +1,7 @@
 import { PerformancePoint, PerformanceResult, ValuationMethod } from '../agent.types';
 import { ghostfolioGet } from './http';
-import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
+import { BaseTool } from './base-tool';
+import { AgentToolDefinition, ToolContext } from './tool-registry';
 
 const MAX_CHART_POINTS = 20;
 
@@ -18,11 +19,11 @@ interface PortfolioPerformanceLike {
   };
 }
 
-export class GetPerformanceTool implements ToolExecutor {
+export class GetPerformanceTool extends BaseTool {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'getPerformance',
     description:
-      'Retrieves portfolio performance metrics and historical chart data for a given time range. Returns total return percentage, net performance, and a time series of portfolio values.',
+      'Retrieves portfolio performance for one time range only: total return percentage and time series. Single responsibility. Idempotent and safe to retry. Returns structured result; on failure sets reasonIfUnavailable.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -37,64 +38,66 @@ export class GetPerformanceTool implements ToolExecutor {
     }
   };
 
-  public async execute(
+  protected async run(
     input: Record<string, unknown>,
     context: ToolContext
   ): Promise<PerformanceResult> {
     const dateRange = String(input.dateRange ?? 'max');
+    const result = await ghostfolioGet<PortfolioPerformanceLike>({
+      path: `/api/v2/portfolio/performance?range=${encodeURIComponent(dateRange)}`,
+      jwt: context.jwt
+    });
 
-    try {
-      const result = await ghostfolioGet<PortfolioPerformanceLike>({
-        path: `/api/v2/portfolio/performance?range=${encodeURIComponent(dateRange)}`,
-        jwt: context.jwt
-      });
+    const chart = result.chart ?? [];
+    const sampledChart = this.sampleChart(chart, MAX_CHART_POINTS);
 
-      const chart = result.chart ?? [];
-      const sampledChart = this.sampleChart(chart, MAX_CHART_POINTS);
+    const timeSeries: PerformancePoint[] = sampledChart.map((item) => ({
+      date: item.date,
+      value: {
+        currency: context.baseCurrency,
+        amount: item.netWorth ?? 0
+      },
+      returnPercent: item.netPerformanceInPercentage ?? null
+    }));
 
-      const timeSeries: PerformancePoint[] = sampledChart.map((item) => ({
-        date: item.date,
-        value: {
-          currency: context.baseCurrency,
-          amount: item.netWorth ?? 0
-        },
-        returnPercent: item.netPerformanceInPercentage ?? null
-      }));
+    const totalReturnPercent = result.performance?.netPerformancePercentage ?? null;
 
-      const totalReturnPercent = result.performance?.netPerformancePercentage ?? null;
+    const valuationMethod: ValuationMethod = result.hasErrors
+      ? 'cost_basis'
+      : 'market';
 
-      const valuationMethod: ValuationMethod = result.hasErrors
-        ? 'cost_basis'
-        : 'market';
+    const now = new Date().toISOString().split('T')[0];
 
-      const now = new Date().toISOString().split('T')[0];
+    return {
+      accountId: 'default',
+      timeframe: { start: '', end: now },
+      valuationMethod,
+      asOf: now,
+      totalReturnPercent,
+      timeSeries,
+      reasonIfUnavailable: result.hasErrors
+        ? 'Some data may be incomplete or contain errors.'
+        : null
+    };
+  }
 
-      return {
-        accountId: 'default',
-        timeframe: { start: '', end: now },
-        valuationMethod,
-        asOf: now,
-        totalReturnPercent,
-        timeSeries,
-        reasonIfUnavailable: result.hasErrors
-          ? 'Some data may be incomplete or contain errors.'
-          : null
-      };
-    } catch (error) {
-      const now = new Date().toISOString().split('T')[0];
-
-      return {
-        accountId: 'default',
-        timeframe: { start: '', end: now },
-        valuationMethod: 'cost_basis',
-        asOf: null,
-        totalReturnPercent: null,
-        timeSeries: [],
-        reasonIfUnavailable: `Performance data is not available: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      };
-    }
+  protected onError(
+    error: unknown,
+    _input: Record<string, unknown>,
+    _context: ToolContext
+  ): PerformanceResult {
+    const now = new Date().toISOString().split('T')[0];
+    return {
+      accountId: 'default',
+      timeframe: { start: '', end: now },
+      valuationMethod: 'cost_basis',
+      asOf: null,
+      totalReturnPercent: null,
+      timeSeries: [],
+      reasonIfUnavailable: `Performance data is not available: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    };
   }
 
   private sampleChart(

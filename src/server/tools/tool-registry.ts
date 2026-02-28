@@ -1,3 +1,11 @@
+/**
+ * Tool guidelines (all tools in this module follow these):
+ * - Does ONE thing (atomic)
+ * - Safe to retry where possible (idempotent for read tools; logPaperTrade is not)
+ * - Clear documentation (description + input_schema)
+ * - Returns structured results (typed; errors return structured error/reasonIfUnavailable)
+ * - Handles errors gracefully (catch and return structured result instead of throwing)
+ */
 export interface ToolContext {
   userId: string;
   baseCurrency: string;

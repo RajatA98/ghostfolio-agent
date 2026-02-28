@@ -38,6 +38,8 @@ export interface PortfolioSnapshotResult {
   allocationByAssetClass?: AllocationRow[];
   holdings: HoldingRow[];
   isPriceDataMissing: boolean;
+  /** Set when the snapshot could not be fully loaded (e.g. API error). */
+  reasonIfUnavailable?: string | null;
 }
 
 export interface PerformancePoint {
@@ -69,6 +71,8 @@ export interface SimulateAllocationResult {
   newTotalValue: Money;
   newAllocationBySymbol: AllocationRow[];
   notes: string[];
+  /** Set when the simulation could not run (e.g. portfolio fetch failed). */
+  reasonIfUnavailable?: string | null;
 }
 
 export interface MarketPriceRow {
@@ -114,6 +118,8 @@ export interface AgentLoopMeta {
   iterations: number;
   totalMs: number;
   tokenUsage: TokenUsage;
+  estimatedCostUsd: number;
+  toolsCalled: string[];
   terminationReason:
     | 'end_turn'
     | 'max_iterations'
@@ -139,16 +145,51 @@ export interface AgentChatResponse {
   loopMeta?: AgentLoopMeta;
 }
 
+export type AgentStreamEvent =
+  | { type: 'iteration_start'; iteration: number }
+  | { type: 'thinking'; iteration: number }
+  | { type: 'tool_start'; tool: string; iteration: number }
+  | {
+      type: 'tool_end';
+      tool: string;
+      ok: boolean;
+      ms: number;
+      iteration: number;
+      detail?: string;
+    }
+  | {
+      type: 'done';
+      answer: string;
+      confidence: number;
+      warnings: string[];
+      toolTrace: ToolTraceRow[];
+      loopMeta?: AgentLoopMeta;
+    }
+  | { type: 'error'; message: string };
+
 export interface GhostfolioActivity {
   accountId: string;
   currency: string;
-  dataSource: 'YAHOO';
+  dataSource: 'YAHOO' | 'MANUAL';
   date: string;
   fee: number;
   quantity: number;
   symbol: string;
-  type: 'BUY' | 'SELL';
+  type: 'BUY' | 'SELL' | 'DEPOSIT' | 'WITHDRAWAL';
   unitPrice: number;
+}
+
+// --- Fund Movements (Deposits & Withdrawals via Ghostfolio) ---
+
+export interface FundMovementResult {
+  movementId: string;
+  type: 'DEPOSIT' | 'WITHDRAWAL';
+  amount: number;
+  currency: string;
+  status: string;
+  ghostfolioSynced: boolean;
+  /** Set when the fund movement could not be logged (e.g. network or API error). */
+  error?: string | null;
 }
 
 // --- Paper Trading (via Ghostfolio) ---
@@ -170,9 +211,57 @@ export interface PaperTradeResult {
   currency: string;
   status: string;
   ghostfolioSynced: boolean;
+  /** Set when the trade could not be logged (e.g. network or API error). */
+  error?: string | null;
 }
 
+// --- Stock Overview (Yahoo Finance fundamentals) ---
+
+export interface StockOverviewRow {
+  symbol: string;
+  price: Money;
+  previousClose: number;
+  dayChangePercent: number;
+  fiftyTwoWeekHigh: number;
+  fiftyTwoWeekLow: number;
+  marketCap: number | null;
+  avgVolume: number | null;
+  exchange: string | null;
+  assetType: string | null;
+  asOf: IsoDate;
+  source: string;
+}
+
+export interface StockOverviewResult {
+  rows: StockOverviewRow[];
+  asOf: IsoDate;
+  source: string;
+}
+
+// --- Market News (Finnhub) ---
+
+export interface NewsArticle {
+  headline: string;
+  summary: string;
+  source: string;
+  datetime: IsoDate;
+  url: string;
+}
+
+export interface MarketNewsResult {
+  symbol: string;
+  articles: NewsArticle[];
+  asOf: IsoDate;
+  source: string;
+  /** Set when news could not be fetched (e.g. missing API key or network error). */
+  reasonIfUnavailable?: string | null;
+}
+
+// --- Portfolio Read ---
+
 export interface PortfolioReadResult {
+  /** Set when the request failed (e.g. auth or API error). When set, holdings may be empty. */
+  error?: string | null;
   holdings: Array<{
     symbol: string;
     name?: string | null;

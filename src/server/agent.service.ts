@@ -5,15 +5,22 @@ import { buildSystemPrompt } from './agent.prompt';
 import {
   AgentChatRequest,
   AgentChatResponse,
+  AgentStreamEvent,
   AgentLoopMeta,
   AllocationChange,
   PortfolioSnapshotResult,
   ToolTraceRow,
   ValuationMethod
 } from './agent.types';
-import { computeConfidence, verifyAgentResponse } from './agent.verifier';
+import { computeConfidence, verifyAgentResponse, verifyTradePrice } from './agent.verifier';
 import { createAnthropicClient, withLangfuseTrace } from './observability';
-import { checkTradeConfirmation, formatTradeProposal, TradeGuardrailInput } from './trade-guardrail';
+import {
+  checkTradeConfirmation,
+  checkFundMovementConfirmation,
+  formatTradeProposal,
+  TradeGuardrailInput,
+  FundMovementGuardrailInput
+} from './trade-guardrail';
 import { GhostfolioPortfolioService } from './services/ghostfolio-portfolio.service';
 import { GetMarketPricesTool } from './tools/get-market-prices.tool';
 import { GetPerformanceTool } from './tools/get-performance.tool';
@@ -21,6 +28,9 @@ import { GetPortfolioSnapshotTool } from './tools/get-portfolio-snapshot.tool';
 import { PortfolioReadTool } from './tools/portfolio-read.tool';
 import { PortfolioTradeTool } from './tools/portfolio-trade.tool';
 import { SimulateAllocationChangeTool } from './tools/simulate-allocation-change.tool';
+import { GetStockOverviewTool } from './tools/get-stock-overview.tool';
+import { GetMarketNewsTool } from './tools/get-market-news.tool';
+import { DepositWithdrawTool } from './tools/deposit-withdraw.tool';
 import { ToolContext, ToolRegistry } from './tools/tool-registry';
 
 interface RunnableToolUse {
@@ -29,6 +39,9 @@ interface RunnableToolUse {
   name: string;
   input: unknown;
 }
+
+const SONNET_INPUT_TOKEN_COST_USD = 3.0 / 1_000_000;
+const SONNET_OUTPUT_TOKEN_COST_USD = 15.0 / 1_000_000;
 
 export class AgentService {
   private readonly toolRegistry: ToolRegistry;
@@ -60,6 +73,18 @@ export class AgentService {
       enabled: agentConfig.enableExternalMarketData
     });
 
+    this.toolRegistry.register({
+      definition: GetStockOverviewTool.DEFINITION,
+      executor: new GetStockOverviewTool(),
+      enabled: agentConfig.enableExternalMarketData
+    });
+
+    this.toolRegistry.register({
+      definition: GetMarketNewsTool.DEFINITION,
+      executor: new GetMarketNewsTool(),
+      enabled: agentConfig.enableNewsData
+    });
+
     // --- Ghostfolio portfolio tools (paper trading via Ghostfolio) ---
     const portfolioService = new GhostfolioPortfolioService();
 
@@ -76,6 +101,13 @@ export class AgentService {
       requiresConfirmation: true
     });
 
+    this.toolRegistry.register({
+      definition: DepositWithdrawTool.DEFINITION,
+      executor: new DepositWithdrawTool(portfolioService),
+      enabled: true,
+      requiresConfirmation: true
+    });
+
   }
 
   public async chat(
@@ -86,9 +118,15 @@ export class AgentService {
       language: string;
       jwt: string;
       impersonationId?: string;
-    }
+    },
+    onEvent?: (event: AgentStreamEvent) => void
   ): Promise<AgentChatResponse> {
     if (!agentConfig.anthropicApiKey) {
+      onEvent?.({
+        type: 'error',
+        message:
+          'The portfolio analysis agent is not currently configured. Please set the ANTHROPIC_API_KEY environment variable.'
+      });
       return this.buildErrorResponse(
         'The portfolio analysis agent is not currently configured. Please set the ANTHROPIC_API_KEY environment variable.',
         []
@@ -101,12 +139,37 @@ export class AgentService {
     let toolsFailed = 0;
 
     const runChat = async (): Promise<AgentChatResponse> => {
+      // Pre-request guard: block tone-change prompts before they reach the LLM.
+      if (this.isToneChangePrompt(request.message)) {
+        const deflection = this.getToneDeflectionResponse();
+        onEvent?.({
+          type: 'done',
+          answer: deflection,
+          confidence: 1,
+          warnings: [],
+          toolTrace: [],
+          data: { valuationMethod: 'market', asOf: null }
+        });
+        return {
+          answer: deflection,
+          data: { valuationMethod: 'market', asOf: null },
+          toolTrace: [],
+          confidence: 1,
+          warnings: []
+        };
+      }
+
       const client = createAnthropicClient();
+      const toolDefinitions = this.toolRegistry.getDefinitions();
 
       const systemPrompt = buildSystemPrompt({
         baseCurrency: userContext.baseCurrency,
         language: userContext.language,
-        currentDate: new Date().toISOString().split('T')[0]
+        currentDate: new Date().toISOString().split('T')[0],
+        toolInventory: toolDefinitions.map((tool) => ({
+          name: tool.name,
+          description: tool.description
+        }))
       });
 
       const messages: Anthropic.MessageParam[] = [];
@@ -117,13 +180,11 @@ export class AgentService {
       }
       messages.push({ role: 'user', content: request.message });
 
-      const anthropicTools: Anthropic.Tool[] = this.toolRegistry
-        .getDefinitions()
-        .map((td) => ({
+      const anthropicTools: Anthropic.Tool[] = toolDefinitions.map((td) => ({
           name: td.name,
           description: td.description,
           input_schema: td.input_schema as Anthropic.Tool.InputSchema
-        }));
+      }));
 
       const toolContext: ToolContext = {
         userId: userContext.userId,
@@ -138,6 +199,7 @@ export class AgentService {
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
       let terminationReason: AgentLoopMeta['terminationReason'] = 'end_turn';
+      const toolsCalled: string[] = [];
       let tradeBlocked = false;
       const circuitBreakerMap = new Map<string, number>();
       let syntheticInjectedThisRequest = false;
@@ -146,6 +208,9 @@ export class AgentService {
 
       // ─── ReAct loop: Thought → Action → Observation ───────────────
       while (iteration < agentConfig.maxIterations) {
+        const displayIteration = iteration + 1;
+        onEvent?.({ type: 'iteration_start', iteration: displayIteration });
+
         // Timeout check
         if (Date.now() - loopStartMs > agentConfig.timeoutMs) {
           terminationReason = 'timeout';
@@ -177,6 +242,7 @@ export class AgentService {
 
         // Save content for post-loop text extraction
         lastResponseContent = response.content;
+        onEvent?.({ type: 'thinking', iteration: displayIteration });
 
         // ─── Extract LLM tool calls (if any) ─────────────────────────
         const toolUseBlocks = response.content.filter(
@@ -239,6 +305,12 @@ export class AgentService {
         const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
 
         for (const toolUse of allToolUseBlocks) {
+          toolsCalled.push(toolUse.name);
+          onEvent?.({
+            type: 'tool_start',
+            tool: toolUse.name,
+            iteration: displayIteration
+          });
           const startMs = Date.now();
           const executor = this.toolRegistry.getExecutor(toolUse.name);
 
@@ -257,34 +329,94 @@ export class AgentService {
               content: JSON.stringify({ error: errorMsg }),
               is_error: true
             });
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail: errorMsg
+            });
             continue;
           }
 
-          // ─── Trade confirmation guardrail ──────────────────────────
+          // ─── Confirmation guardrail (trades + fund movements) ──────
           if (this.toolRegistry.needsConfirmation(toolUse.name)) {
-            const tradeInput = toolUse.input as Record<string, unknown>;
-            const guardrailResult = checkTradeConfirmation(
-              tradeInput as unknown as TradeGuardrailInput,
-              request.message,
-              request.conversationHistory
-            );
+            const toolInput = toolUse.input as Record<string, unknown>;
+            const isFundMovement = toolUse.name === 'logFundMovement';
+
+            const guardrailResult = isFundMovement
+              ? checkFundMovementConfirmation(
+                  toolInput as unknown as FundMovementGuardrailInput,
+                  request.message,
+                  request.conversationHistory
+                )
+              : checkTradeConfirmation(
+                  toolInput as unknown as TradeGuardrailInput,
+                  request.message,
+                  request.conversationHistory
+                );
 
             if (!guardrailResult.allowed) {
               tradeBlocked = true;
-              const blockedMsg = guardrailResult.cancelled
-                ? 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.'
-                : (guardrailResult.proposal ?? formatTradeProposal(tradeInput as unknown as TradeGuardrailInput));
 
-              // Store trade input for deterministic fallback if LLM produces empty text
+              let blockedMsg: string;
+
+              if (guardrailResult.cancelled) {
+                blockedMsg = isFundMovement
+                  ? 'FUND_MOVEMENT_CANCELLED: The user cancelled this fund movement. Do not execute it. Tell the user the fund movement was cancelled and nothing was executed.'
+                  : 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.';
+              } else if (isFundMovement) {
+                blockedMsg = guardrailResult.proposal ?? '';
+              } else {
+                // Build price-verified citation for the guardrail message
+                const _guardPriceV = verifyTradePrice({
+                  symbol: (toolInput as unknown as TradeGuardrailInput).symbol,
+                  proposedPrice: (toolInput as unknown as TradeGuardrailInput).unitPrice,
+                  toolResults
+                });
+                blockedMsg = guardrailResult.proposal ?? formatTradeProposal(
+                  toolInput as unknown as TradeGuardrailInput,
+                  { priceCitation: _guardPriceV.citationText, priceWarning: _guardPriceV.warning }
+                );
+              }
+
+              // Store deterministic fallback for the confirmation prompt
               if (!guardrailResult.cancelled) {
-                const ti = tradeInput as unknown as TradeGuardrailInput;
-                const total = ti.quantity * ti.unitPrice;
-                tradeProposalForFallback =
-                  `I'd like to place the following paper trade — please confirm this is what you want:\n\n` +
-                  `**${ti.side.toUpperCase()} ${ti.quantity} shares of ${ti.symbol.toUpperCase()}** ` +
-                  `at $${ti.unitPrice.toFixed(2)}/share (estimated total: $${total.toFixed(2)}).\n\n` +
-                  `This is a paper trade — no real money involved. ` +
-                  `Reply 'yes' to execute, or 'cancel' to abort.`;
+                if (isFundMovement) {
+                  const fi = toolInput as unknown as FundMovementGuardrailInput;
+                  const action = fi.type?.toUpperCase() === 'WITHDRAWAL' ? 'withdraw' : 'deposit';
+                  const currency = fi.currency ?? 'USD';
+                  tradeProposalForFallback =
+                    `I'd like to ${action} the following funds — please confirm:\n\n` +
+                    `**${fi.type?.toUpperCase()} $${Number(fi.amount).toFixed(2)} ${currency}**\n\n` +
+                    `This is simulated — no real money involved. ` +
+                    `Reply 'yes' to confirm, or 'cancel' to abort.`;
+                } else {
+                  const ti = toolInput as unknown as TradeGuardrailInput;
+
+                  const priceVerification = verifyTradePrice({
+                    symbol: ti.symbol,
+                    proposedPrice: ti.unitPrice,
+                    toolResults
+                  });
+
+                  const confirmedPrice = priceVerification.marketPrice ?? ti.unitPrice;
+                  const total = ti.quantity * confirmedPrice;
+                  const priceAnnotation = priceVerification.citationText
+                    ? ` (${priceVerification.citationText})`
+                    : '';
+
+                  tradeProposalForFallback =
+                    `I'd like to place the following paper trade — please confirm this is what you want:\n\n` +
+                    `**${ti.side.toUpperCase()} ${ti.quantity} shares of ${ti.symbol.toUpperCase()}** ` +
+                    `at $${confirmedPrice.toFixed(2)}/share${priceAnnotation} (estimated total: $${total.toFixed(2)}).\n\n` +
+                    `This is a paper trade — no real money involved. ` +
+                    `Reply 'yes' to execute, or 'cancel' to abort.` +
+                    (priceVerification.warning
+                      ? `\n\n⚠️ **Price note:** ${priceVerification.warning}`
+                      : '');
+                }
               }
 
               toolTrace.push({
@@ -296,6 +428,16 @@ export class AgentService {
                 type: 'tool_result',
                 tool_use_id: toolUse.id,
                 content: JSON.stringify({ blocked: true, message: blockedMsg })
+              });
+              onEvent?.({
+                type: 'tool_end',
+                tool: toolUse.name,
+                ok: false,
+                ms: Date.now() - startMs,
+                iteration: displayIteration,
+                detail: guardrailResult.cancelled
+                  ? 'BLOCKED: trade cancelled by user'
+                  : 'BLOCKED: confirmation required'
               });
               continue;
             }
@@ -318,6 +460,22 @@ export class AgentService {
               tool_use_id: toolUse.id,
               content: JSON.stringify(result)
             });
+            const detail =
+              toolUse.name === 'getMarketPrices' &&
+              typeof result === 'object' &&
+              result &&
+              'source' in result &&
+              typeof (result as { source?: unknown }).source === 'string'
+                ? String((result as { source: string }).source)
+                : undefined;
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: true,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail
+            });
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             toolsFailed++;
@@ -335,6 +493,14 @@ export class AgentService {
               }),
               is_error: true
             });
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail: errorMsg
+            });
           }
         }
 
@@ -344,6 +510,12 @@ export class AgentService {
           const snapshotExecutor = this.toolRegistry.getExecutor('getPortfolioSnapshot');
           if (snapshotExecutor) {
             try {
+              toolsCalled.push('getPortfolioSnapshot');
+              onEvent?.({
+                type: 'tool_start',
+                tool: 'getPortfolioSnapshot',
+                iteration: iteration + 1
+              });
               const snapshotStartMs = Date.now();
               const snapshotResult = await snapshotExecutor.execute({}, toolContext);
               toolResults.set('getPortfolioSnapshot', snapshotResult);
@@ -367,8 +539,23 @@ export class AgentService {
                 tool_use_id: snapshotToolUse.id,
                 content: JSON.stringify(snapshotResult)
               });
+              onEvent?.({
+                type: 'tool_end',
+                tool: 'getPortfolioSnapshot',
+                ok: true,
+                ms: Date.now() - snapshotStartMs,
+                iteration: iteration + 1
+              });
             } catch {
               // Non-critical: trade already logged, just can't show updated portfolio
+              onEvent?.({
+                type: 'tool_end',
+                tool: 'getPortfolioSnapshot',
+                ok: false,
+                ms: 0,
+                iteration: iteration + 1,
+                detail: 'Tool execution failed during post-trade refresh'
+              });
             }
           }
         }
@@ -441,7 +628,12 @@ export class AgentService {
         message: request.message,
         toolResults
       });
-      const verification = verifyAgentResponse({ answer, toolResults });
+      const verification = verifyAgentResponse({
+        answer,
+        toolResults,
+        userMessage: request.message,
+        conversationHistory: request.conversationHistory
+      });
 
       const snapshotResult = toolResults.get('getPortfolioSnapshot') as
         | PortfolioSnapshotResult
@@ -456,18 +648,20 @@ export class AgentService {
         isPriceDataMissing,
         toolsSucceeded,
         toolsFailed,
-        hasHoldings
+        hasHoldings,
+        terminationReason
       });
 
-      const finalConfidence = Math.max(
-        0,
-        baseConfidence - verification.confidenceAdjustment
-      );
+      let finalConfidence = Math.max(0.05, baseConfidence - verification.confidenceAdjustment);
+      if (typeof verification.confidenceCeiling === 'number') {
+        finalConfidence = Math.min(finalConfidence, verification.confidenceCeiling);
+      }
+      finalConfidence = Math.round(Math.min(1.0, Math.max(0.05, finalConfidence)) * 100) / 100;
 
       const valuationMethod: ValuationMethod =
         snapshotResult?.valuationMethod ?? 'market';
 
-      return {
+      const responsePayload: AgentChatResponse = {
         answer,
         data: {
           valuationMethod,
@@ -487,9 +681,23 @@ export class AgentService {
             outputTokens: totalOutputTokens,
             totalTokens: totalInputTokens + totalOutputTokens
           },
+          estimatedCostUsd:
+            totalInputTokens * SONNET_INPUT_TOKEN_COST_USD +
+            totalOutputTokens * SONNET_OUTPUT_TOKEN_COST_USD,
+          toolsCalled,
           terminationReason
         }
       };
+      onEvent?.({
+        type: 'done',
+        answer: responsePayload.answer,
+        confidence: responsePayload.confidence,
+        warnings: responsePayload.warnings,
+        toolTrace: responsePayload.toolTrace,
+        loopMeta: responsePayload.loopMeta
+      });
+
+      return responsePayload;
     };
 
     try {
@@ -501,6 +709,7 @@ export class AgentService {
       });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      onEvent?.({ type: 'error', message: errorMsg });
       return this.buildErrorResponse(
         `I encountered an error while processing your request. Please try again. (${errorMsg})`,
         toolTrace
@@ -575,7 +784,48 @@ export class AgentService {
       addTool('simulateAllocationChange', { changes });
     }
 
+    // If user asks about a specific stock/crypto, auto-fetch overview data.
+    const mentionedSymbols = this.extractMentionedSymbols(lower);
+    if (mentionedSymbols.length > 0 && this.isStockAnalysisIntent(lower)) {
+      addTool('getStockOverview', { symbols: mentionedSymbols });
+    }
+
+    // If user asks for news, research, or strategy about a specific symbol.
+    if (mentionedSymbols.length > 0 && this.isNewsOrStrategyIntent(lower)) {
+      addTool('getMarketNews', { symbol: mentionedSymbols[0] });
+    }
+
     return synthetic;
+  }
+
+  private isStockAnalysisIntent(lowerMessage: string): boolean {
+    return /\b(analyz|overview|detail|fundamental|52.?week|market\s*cap|volume|how\s+is|tell\s+me\s+about|look\s+at)\b/.test(lowerMessage);
+  }
+
+  private isNewsOrStrategyIntent(lowerMessage: string): boolean {
+    return /\b(news|strateg|research|what.s\s+happening|recent|headline|earning|sentiment)\b/.test(lowerMessage);
+  }
+
+  private extractMentionedSymbols(lowerMessage: string): string[] {
+    // Match common stock tickers (1-5 uppercase letters) that appear naturally.
+    // We check against the original message for case sensitivity.
+    const tickerPattern = /\b([A-Z]{1,5})\b/g;
+    const stopWords = new Set([
+      'I', 'A', 'THE', 'AND', 'OR', 'MY', 'IS', 'IT', 'IN', 'TO', 'FOR',
+      'OF', 'ON', 'AT', 'BY', 'AN', 'IF', 'DO', 'BUY', 'SELL', 'HOW',
+      'CAN', 'WHAT', 'ALL', 'NOT', 'HAS', 'USD', 'EUR', 'GBP', 'YES', 'NO'
+    ]);
+    const symbols: string[] = [];
+    // Use the original message (not lowered) for ticker extraction
+    const originalUpper = lowerMessage.toUpperCase();
+    let match: RegExpExecArray | null;
+    while ((match = tickerPattern.exec(originalUpper)) !== null) {
+      const sym = match[1];
+      if (!stopWords.has(sym) && sym.length >= 2) {
+        symbols.push(sym);
+      }
+    }
+    return [...new Set(symbols)].slice(0, 3); // max 3 symbols
   }
 
   private isPortfolioIntent(lowerMessage: string): boolean {
@@ -752,7 +1002,7 @@ export class AgentService {
     toolResults: Map<string, unknown>;
   }): string {
     const lowerMessage = message.toLowerCase();
-    let finalAnswer = answer.trim();
+    let finalAnswer = this.stripJsonCodeBlocks(answer).trim();
 
     if (!finalAnswer) {
       const simulate = toolResults.get('simulateAllocationChange') as
@@ -795,6 +1045,46 @@ export class AgentService {
     }
 
     return finalAnswer;
+  }
+
+  private isToneChangePrompt(message: string): boolean {
+    const lower = message.toLowerCase().trim();
+    const patterns = [
+      /\b(talk|speak|respond|answer)\s+(like|as)\s+(a\s+)?(pirate|robot|shakespeare|cowboy)/i,
+      /\b(be|act)\s+(sarcastic|funny|silly|weird|crazy)/i,
+      /\byou\s+are\s+(now\s+)?(dan|dani|jailbroken)/i,
+      /\bpretend\s+(to\s+be|you\s+are|you're)/i,
+      /\b(respond|answer|talk)\s+in\s+(the\s+)?(style|voice|character)\s+of/i,
+      /\b(roleplay|role\s*play)\s+as/i,
+      /\b(act|behave)\s+as\s+(my\s+)?(friend|buddy|pal)/i,
+      /\b(ignore|forget)\s+(your\s+)?(instructions?|rules?)/i
+    ];
+    return patterns.some((p) => p.test(lower));
+  }
+
+  private getToneDeflectionResponse(): string {
+    const options = [
+      "Ha, I appreciate the creativity! But I'm built specifically for portfolio analysis — that's where I really shine. Want to check your allocation or see how your portfolio is performing?",
+      "Love the enthusiasm! That's a bit outside my wheelhouse though — I'm your portfolio analysis assistant. I can help you view holdings, track performance, simulate trades, or check market prices.",
+      "That's a fun idea! But I'll stick to what I do best — crunching your portfolio numbers. What would you like to know about your investments?"
+    ];
+    return options[Math.floor(Math.random() * options.length)];
+  }
+
+  private stripJsonCodeBlocks(text: string): string {
+    // Remove fenced JSON blocks from LLM answer so UI stays clean text-first.
+    let out = text
+      // 1. Fenced ```json ... ``` blocks
+      .replace(/```\s*json[\s\S]*?```/gi, '')
+      // 2. Fenced ``` blocks containing our structured data keys
+      .replace(/```[\s\S]*?valuationMethod[\s\S]*?```/gi, '');
+
+    // 3. Unfenced JSON payloads containing "valuationMethod" (up to 3 levels of nested braces).
+    //    Catches inline JSON the LLM includes without code fences.
+    const nb = '(?:[^{}]|\\{(?:[^{}]|\\{[^{}]*\\})*\\})*'; // nested braces helper
+    out = out.replace(new RegExp(`\\{${nb}"valuationMethod"${nb}\\}`, 'g'), '');
+
+    return out.replace(/\n{3,}/g, '\n\n').trim();
   }
 
   private buildErrorResponse(

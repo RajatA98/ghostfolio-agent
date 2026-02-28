@@ -12,8 +12,12 @@ export interface AgentChatMessage {
 
 export class AgentChatHistoryService {
   private messages: AgentChatMessage[] = [];
+  private readonly storageKey: string;
 
-  public constructor() {
+  public constructor(userId?: string) {
+    this.storageKey = userId
+      ? `${AGENT_CHAT_HISTORY_KEY}_${userId}`
+      : AGENT_CHAT_HISTORY_KEY;
     this.messages = this.loadMessages();
   }
 
@@ -40,13 +44,22 @@ export class AgentChatHistoryService {
     return [...this.messages];
   }
 
+  public clear(): void {
+    this.messages = [];
+    window.localStorage.removeItem(this.storageKey);
+  }
+
+  public static removeUnscopedHistory(): void {
+    window.localStorage.removeItem(AGENT_CHAT_HISTORY_KEY);
+  }
+
   private appendMessage(message: AgentChatMessage) {
     this.messages = [...this.messages, message].slice(-MAX_HISTORY_MESSAGES);
     this.persistMessages();
   }
 
   private loadMessages(): AgentChatMessage[] {
-    const rawValue = window.localStorage.getItem(AGENT_CHAT_HISTORY_KEY);
+    const rawValue = window.localStorage.getItem(this.storageKey);
 
     if (!rawValue) {
       return [];
@@ -82,7 +95,7 @@ export class AgentChatHistoryService {
 
   private persistMessages() {
     window.localStorage.setItem(
-      AGENT_CHAT_HISTORY_KEY,
+      this.storageKey,
       JSON.stringify(this.messages)
     );
   }

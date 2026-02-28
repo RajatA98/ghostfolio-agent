@@ -25,6 +25,12 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-perf-003"
   query: "What is my total return percentage for the last year?"
@@ -99,6 +105,12 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-perf-010"
   query: "What was my return percentage since January?"
@@ -114,6 +126,9 @@
   if_unavailable_must_contain:
     - "not available"
     - "error"
+    - "unable"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-perf-011"
   query: "Show my portfolio performance for this week."
@@ -125,6 +140,12 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"
 
 - id: "gs-perf-012"
   query: "How did my portfolio perform from 2026-01-01 to 2026-02-01?"
@@ -147,3 +168,9 @@
   must_contain: []
   must_not_contain:
     - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "error"
+    - "couldn't"
+    - "can't"

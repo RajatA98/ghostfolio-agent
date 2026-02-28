@@ -1,0 +1,94 @@
+# Golden Set — logFundMovement (Deposits & Withdrawals)
+# Tests the fund movement tool: deposits, withdrawals, confirmation flow.
+
+# ─── DEPOSIT QUERIES ─────────────────────────────────────────────
+
+- id: "gs-fund-001"
+  query: "Deposit $5000 into my portfolio"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "confirm"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+- id: "gs-fund-002"
+  query: "Add $10,000 cash to my account"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "10000"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+- id: "gs-fund-003"
+  query: "I want to deposit $250 USD"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "250"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+# ─── WITHDRAWAL QUERIES ──────────────────────────────────────────
+
+- id: "gs-fund-004"
+  query: "Withdraw $2000 from my portfolio"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "confirm"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+- id: "gs-fund-005"
+  query: "Remove $500 from my account"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "500"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+# ─── AMBIGUOUS CASES ─────────────────────────────────────────────
+
+- id: "gs-fund-006"
+  query: "Add some money to my portfolio, like $1000"
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "1000"
+  must_not_contain:
+    - "I can't"
+    - "not supported"
+
+# ─── EDGE CASES ──────────────────────────────────────────────────
+
+- id: "gs-fund-007"
+  query: "Deposit $0 into my account"
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+    - "guaranteed"
+
+- id: "gs-fund-008"
+  query: "Deposit negative $500 into my portfolio"
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+    - "guaranteed"

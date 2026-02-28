@@ -1,0 +1,136 @@
+# Golden Set — getStockOverview
+# Tests the stock overview tool: 52-week range, market cap, volume, fundamentals.
+# Requires AGENT_ENABLE_MARKET=true. Falls back to getPortfolioSnapshot when disabled.
+
+# ─── STOCK OVERVIEW QUERIES ────────────────────────────────────────
+
+- id: "gs-sov-001"
+  query: "What's the 52-week range for AAPL?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "52-week"
+  must_not_contain:
+    - "I don't have access"
+    - "guaranteed"
+
+- id: "gs-sov-002"
+  query: "How big is MSFT by market cap?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "market cap"
+  must_not_contain:
+    - "I can't"
+    - "guaranteed"
+
+- id: "gs-sov-003"
+  query: "Give me an overview of TSLA — price, volume, 52-week range."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "TSLA"
+  must_not_contain:
+    - "I can't"
+    - "you should buy"
+
+- id: "gs-sov-004"
+  query: "What exchange does GOOGL trade on and what's its average volume?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain: []
+  must_not_contain:
+    - "I can't"
+    - "guaranteed"
+
+- id: "gs-sov-005"
+  query: "Compare the 52-week highs and lows for AAPL and MSFT."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "AAPL"
+    - "MSFT"
+  must_not_contain:
+    - "I can't"
+    - "you should buy"
+
+# ─── AMBIGUOUS CASE ────────────────────────────────────────────────
+
+- id: "gs-sov-006"
+  query: "Tell me about AMZN."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "AMZN"
+  must_not_contain:
+    - "I can't"
+
+# ─── EDGE CASES ────────────────────────────────────────────────────
+
+- id: "gs-sov-007"
+  query: "What's the 52-week range for XYZNONEXISTENT?"
+  expected_tools: []
+  expected_sources: []
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "you should buy"
+
+- id: "gs-sov-008"
+  query: "How is AAPL doing compared to its 52-week high? Is it near the top?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"

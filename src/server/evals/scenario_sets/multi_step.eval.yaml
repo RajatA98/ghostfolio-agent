@@ -185,3 +185,96 @@
     - "VTI"
   must_not_contain:
     - "I can't"
+
+# ─── Educational Strategy / Multi-Tool Chaining ───────────────────
+
+- id: "sc-multi-012"
+  query: "How can I improve my portfolio diversification? Any suggestions?"
+  category: multi_tool
+  subcategory: educational_strategy
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "educational"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend purchasing"
+    - "guaranteed"
+
+- id: "sc-multi-013"
+  query: "Analyze AAPL for me — is it worth looking at? Show me the fundamentals and recent news."
+  category: multi_tool
+  subcategory: stock_analysis_chaining
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getStockOverview
+      - getMarketPrices
+    expected_sources:
+      - getStockOverview
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"
+    - "guaranteed"
+
+- id: "sc-multi-014"
+  query: "What's happening with TSLA? Give me price, overview, and any recent news."
+  category: multi_tool
+  subcategory: full_stock_analysis
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  if_market_enabled:
+    expected_tools:
+      - getMarketPrices
+      - getStockOverview
+    expected_sources:
+      - getMarketPrices
+      - getStockOverview
+  must_contain:
+    - "TSLA"
+  must_not_contain:
+    - "I can't"
+
+- id: "sc-multi-015"
+  query: "Review my portfolio strategy. Am I well diversified? What sectors am I missing?"
+  category: multi_tool
+  subcategory: educational_strategy
+  difficulty: moderate
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend purchasing"
+    - "guaranteed"
+
+# ─── Fund Movement Scenarios ─────────────────────────────────────
+
+- id: "sc-multi-016"
+  query: "Deposit $5000 into my account and then show me my portfolio"
+  category: multi_tool
+  subcategory: fund_movement
+  difficulty: moderate
+  expected_tools:
+    - logFundMovement
+  expected_sources: []
+  must_contain:
+    - "confirm"
+  must_not_contain:
+    - "I can't"
+    - "not supported"

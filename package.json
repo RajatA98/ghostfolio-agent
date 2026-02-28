@@ -24,11 +24,13 @@
     "@opentelemetry/sdk-node": "^0.212.0",
     "@prisma/client": "^5.22.0",
     "@supabase/supabase-js": "^2.97.0",
+    "@types/marked": "^5.0.2",
     "big.js": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "langsmith": "^0.5.6",
+    "marked": "^17.0.3",
     "prisma": "^5.22.0",
     "yahoo-finance2": "^2.14.0"
   },
