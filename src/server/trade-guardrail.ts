@@ -27,35 +27,41 @@ interface ConversationMessage {
 }
 
 const CONFIRMATION_PATTERNS = [
-  /^yes$/i,
+  /^yes\b/i,
   /^y$/i,
-  /^confirm$/i,
-  /^go ahead$/i,
-  /^do it$/i,
-  /^execute$/i,
-  /^proceed$/i,
-  /^sure$/i,
-  /^ok$/i,
-  /^okay$/i,
-  /^yep$/i,
-  /^yeah$/i,
-  /^yup$/i,
-  /^absolutely$/i,
-  /^affirmative$/i
+  /^confirm\b/i,
+  /^go ahead\b/i,
+  /^do it\b/i,
+  /^execute\b/i,
+  /^proceed\b/i,
+  /^sure\b/i,
+  /^ok\b/i,
+  /^okay\b/i,
+  /^yep\b/i,
+  /^yeah\b/i,
+  /^yup\b/i,
+  /^absolutely\b/i,
+  /^affirmative\b/i,
+  /^let'?s? do it/i,
+  /^sounds good/i,
+  /^that'?s? (fine|correct|right)/i,
+  /^(please|pls)\s+(confirm|execute|proceed|go ahead)/i
 ];
 
 const CANCELLATION_PATTERNS = [
-  /^no$/i,
+  /^no\b/i,
   /^n$/i,
-  /^cancel$/i,
-  /^nevermind$/i,
-  /^never mind$/i,
-  /^abort$/i,
-  /^don'?t$/i,
-  /^stop$/i,
-  /^scratch that$/i,
-  /^nah$/i,
-  /^nope$/i
+  /^cancel\b/i,
+  /^nevermind/i,
+  /^never mind/i,
+  /^abort\b/i,
+  /^don'?t\b/i,
+  /^stop\b/i,
+  /^scratch that/i,
+  /^nah\b/i,
+  /^nope\b/i,
+  /^forget it/i,
+  /^skip\b/i
 ];
 
 function isConfirmation(message: string): boolean {

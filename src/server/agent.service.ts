@@ -43,6 +43,37 @@ interface RunnableToolUse {
 const SONNET_INPUT_TOKEN_COST_USD = 3.0 / 1_000_000;
 const SONNET_OUTPUT_TOKEN_COST_USD = 15.0 / 1_000_000;
 
+/**
+ * Check if a tool result indicates a graceful failure (returned error or
+ * reasonIfUnavailable instead of throwing). BaseTool.execute() swallows all
+ * errors, so these results appear as resolved promises. We need to detect
+ * them to report accurate ok/failed status in the tool trace.
+ *
+ * A result is considered failed ONLY when:
+ * - It has an explicit `error` field (from onError()), OR
+ * - It has `reasonIfUnavailable` AND no meaningful data alongside it.
+ *   Tools like getPerformance may return both data AND reasonIfUnavailable
+ *   as a warning — those are treated as success with a caveat.
+ */
+function detectToolResultError(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const r = result as Record<string, unknown>;
+  // Check for explicit error field (e.g. onError() returns { error: "..." })
+  if (typeof r.error === 'string' && r.error) return r.error;
+  // Check for reasonIfUnavailable — but only if the result lacks real data.
+  // If the result has arrays with data or numeric values, it's a warning, not failure.
+  if (typeof r.reasonIfUnavailable === 'string' && r.reasonIfUnavailable) {
+    const hasData = Object.entries(r).some(([key, val]) => {
+      if (key === 'reasonIfUnavailable' || key === 'error' || key === 'asOf' || key === 'source') return false;
+      if (Array.isArray(val) && val.length > 0) return true;
+      if (typeof val === 'number' && val !== 0) return true;
+      return false;
+    });
+    if (!hasData) return r.reasonIfUnavailable;
+  }
+  return null;
+}
+
 export class AgentService {
   private readonly toolRegistry: ToolRegistry;
 
@@ -172,19 +203,34 @@ export class AgentService {
         }))
       });
 
+      // Conversation history sliding window: cap to last 6 turns to prevent token blowup
+      const MAX_HISTORY_TURNS = 6;
       const messages: Anthropic.MessageParam[] = [];
       if (request.conversationHistory) {
-        for (const msg of request.conversationHistory) {
+        const history = request.conversationHistory;
+        let trimmedHistory = history;
+        if (history.length > MAX_HISTORY_TURNS) {
+          const oldTurns = history.slice(0, -MAX_HISTORY_TURNS);
+          const summary = `[Earlier conversation: user asked about ${oldTurns.filter(m => m.role === 'user').map(m => m.content.slice(0, 50)).join(', ')}]`;
+          trimmedHistory = [
+            { role: 'user' as const, content: summary },
+            { role: 'assistant' as const, content: 'Understood, I have context from our earlier conversation.' },
+            ...history.slice(-MAX_HISTORY_TURNS)
+          ];
+        }
+        for (const msg of trimmedHistory) {
           messages.push({ role: msg.role, content: msg.content });
         }
       }
       messages.push({ role: 'user', content: request.message });
 
-      const anthropicTools: Anthropic.Tool[] = toolDefinitions.map((td) => ({
+      const allAnthropicTools: Anthropic.Tool[] = toolDefinitions.map((td) => ({
           name: td.name,
           description: td.description,
           input_schema: td.input_schema as Anthropic.Tool.InputSchema
       }));
+      // Track which tools have been called across iterations for conditional inclusion
+      const calledToolNames = new Set<string>();
 
       const toolContext: ToolContext = {
         userId: userContext.userId,
@@ -223,12 +269,29 @@ export class AgentService {
           break;
         }
 
+        // Conditional tool inclusion: on iteration 0 send all tools; on iteration 1+
+        // only include tools the LLM just called or hasn't called yet (reduces token count)
+        let anthropicTools = allAnthropicTools;
+        if (iteration > 0) {
+          anthropicTools = allAnthropicTools.filter(
+            t => !calledToolNames.has(t.name) || toolsCalled.includes(t.name)
+          );
+          // Always include at least the tools from last iteration so LLM can re-call
+          if (anthropicTools.length === 0) {
+            anthropicTools = allAnthropicTools;
+          }
+        }
+
         // LLM call: suppress tools if trade was just blocked
+        // Use prompt caching on system message to reduce input tokens on iterations 2+
+        const systemWithCache: Anthropic.TextBlockParam[] = [
+          { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+        ];
         const response = await client.messages.create({
           model: agentConfig.anthropicModel,
           max_tokens: agentConfig.maxTokens,
           temperature: agentConfig.temperature,
-          system: systemPrompt,
+          system: systemWithCache,
           messages,
           ...(tradeBlocked ? {} : { tools: anthropicTools })
         });
@@ -273,9 +336,25 @@ export class AgentService {
         const allToolUseBlocks = [...runnableToolUseBlocks, ...syntheticToolUseBlocks];
 
         // If stop_reason is end_turn AND there are no synthetic tools to
-        // inject, the LLM is done.
+        // inject, the LLM is done. Stream the final answer via text_delta events.
         if (response.stop_reason !== 'tool_use' && syntheticToolUseBlocks.length === 0) {
           terminationReason = 'end_turn';
+
+          if (onEvent) {
+            const answerText = this.extractText(response.content);
+            if (answerText) {
+              // Emit text in chunks with micro-delays so SSE flushes each one
+              const chunkSize = 12;
+              for (let i = 0; i < answerText.length; i += chunkSize) {
+                onEvent({ type: 'text_delta', text: answerText.slice(i, i + chunkSize) });
+                // Yield to event loop so res.write() actually flushes
+                if (i + chunkSize < answerText.length) {
+                  await new Promise((r) => setImmediate(r));
+                }
+              }
+            }
+          }
+
           break;
         }
 
@@ -304,7 +383,114 @@ export class AgentService {
         // ─── Execute tools ──────────────────────────────────────────
         const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
 
+        // Partition: read-only tools can run in parallel, write tools must be sequential
+        const readOnlyTools: RunnableToolUse[] = [];
+        const writeTools: RunnableToolUse[] = [];
         for (const toolUse of allToolUseBlocks) {
+          if (this.toolRegistry.needsConfirmation(toolUse.name)) {
+            writeTools.push(toolUse);
+          } else {
+            readOnlyTools.push(toolUse);
+          }
+        }
+
+        // Execute read-only tools in parallel
+        if (readOnlyTools.length > 0) {
+          const parallelResults = await Promise.allSettled(
+            readOnlyTools.map(async (toolUse) => {
+              toolsCalled.push(toolUse.name);
+              onEvent?.({
+                type: 'tool_start',
+                tool: toolUse.name,
+                iteration: displayIteration
+              });
+              const startMs = Date.now();
+              const executor = this.toolRegistry.getExecutor(toolUse.name);
+
+              if (!executor) {
+                throw { isUnknownTool: true, toolUse, startMs, errorMsg: `Unknown or disabled tool: ${toolUse.name}` };
+              }
+
+              const result = await executor.execute(
+                toolUse.input as Record<string, unknown>,
+                toolContext
+              );
+              return { toolUse, result, ms: Date.now() - startMs };
+            })
+          );
+
+          for (const settled of parallelResults) {
+            if (settled.status === 'fulfilled') {
+              const { toolUse, result, ms } = settled.value;
+              toolResults.set(toolUse.name, result);
+              const resultError = detectToolResultError(result);
+              if (resultError) {
+                toolsFailed++;
+                toolTrace.push({ tool: toolUse.name, ok: false, ms, error: resultError });
+              } else {
+                toolsSucceeded++;
+                toolTrace.push({ tool: toolUse.name, ok: true, ms });
+              }
+              toolResultBlocks.push({
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: JSON.stringify(result)
+              });
+              const toolOk = !resultError;
+              const detail =
+                resultError ??
+                (toolUse.name === 'getMarketPrices' &&
+                typeof result === 'object' &&
+                result &&
+                'source' in result &&
+                typeof (result as { source?: unknown }).source === 'string'
+                  ? String((result as { source: string }).source)
+                  : undefined);
+              onEvent?.({
+                type: 'tool_end',
+                tool: toolUse.name,
+                ok: toolOk,
+                ms,
+                iteration: displayIteration,
+                detail
+              });
+            } else {
+              const reason = settled.reason;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const isUnknown = reason && typeof reason === 'object' && (reason as any).isUnknownTool;
+              if (isUnknown) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const { toolUse, startMs, errorMsg } = reason as any;
+                toolsFailed++;
+                toolTrace.push({ tool: toolUse.name, ok: false, ms: Date.now() - startMs, error: errorMsg });
+                toolResultBlocks.push({
+                  type: 'tool_result',
+                  tool_use_id: toolUse.id,
+                  content: JSON.stringify({ error: errorMsg }),
+                  is_error: true
+                });
+                onEvent?.({ type: 'tool_end', tool: toolUse.name, ok: false, ms: Date.now() - startMs, iteration: displayIteration, detail: errorMsg });
+              } else {
+                // Executor threw — extract tool info from the promise index
+                const idx = parallelResults.indexOf(settled);
+                const toolUse = readOnlyTools[idx];
+                const errorMsg = reason instanceof Error ? reason.message : String(reason);
+                toolsFailed++;
+                toolTrace.push({ tool: toolUse.name, ok: false, ms: 0, error: errorMsg });
+                toolResultBlocks.push({
+                  type: 'tool_result',
+                  tool_use_id: toolUse.id,
+                  content: JSON.stringify({ error: `Tool execution failed: ${errorMsg}` }),
+                  is_error: true
+                });
+                onEvent?.({ type: 'tool_end', tool: toolUse.name, ok: false, ms: 0, iteration: displayIteration, detail: errorMsg });
+              }
+            }
+          }
+        }
+
+        // Execute write tools sequentially (guardrail logic preserved)
+        for (const toolUse of writeTools) {
           toolsCalled.push(toolUse.name);
           onEvent?.({
             type: 'tool_start',
@@ -341,115 +527,83 @@ export class AgentService {
           }
 
           // ─── Confirmation guardrail (trades + fund movements) ──────
-          if (this.toolRegistry.needsConfirmation(toolUse.name)) {
-            const toolInput = toolUse.input as Record<string, unknown>;
-            const isFundMovement = toolUse.name === 'logFundMovement';
+          const toolInput = toolUse.input as Record<string, unknown>;
+          const isFundMovement = toolUse.name === 'logFundMovement';
 
-            const guardrailResult = isFundMovement
-              ? checkFundMovementConfirmation(
-                  toolInput as unknown as FundMovementGuardrailInput,
-                  request.message,
-                  request.conversationHistory
-                )
-              : checkTradeConfirmation(
-                  toolInput as unknown as TradeGuardrailInput,
-                  request.message,
-                  request.conversationHistory
-                );
+          const guardrailResult = isFundMovement
+            ? checkFundMovementConfirmation(
+                toolInput as unknown as FundMovementGuardrailInput,
+                request.message,
+                request.conversationHistory
+              )
+            : checkTradeConfirmation(
+                toolInput as unknown as TradeGuardrailInput,
+                request.message,
+                request.conversationHistory
+              );
 
-            if (!guardrailResult.allowed) {
-              tradeBlocked = true;
+          if (!guardrailResult.allowed) {
+            tradeBlocked = true;
 
-              let blockedMsg: string;
+            let blockedMsg: string;
 
-              if (guardrailResult.cancelled) {
-                blockedMsg = isFundMovement
-                  ? 'FUND_MOVEMENT_CANCELLED: The user cancelled this fund movement. Do not execute it. Tell the user the fund movement was cancelled and nothing was executed.'
-                  : 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.';
-              } else if (isFundMovement) {
-                blockedMsg = guardrailResult.proposal ?? '';
+            if (guardrailResult.cancelled) {
+              blockedMsg = isFundMovement
+                ? 'FUND_MOVEMENT_CANCELLED: The user cancelled this fund movement. Do not execute it. Tell the user the fund movement was cancelled and nothing was executed.'
+                : 'TRADE_CANCELLED: The user cancelled this trade. Do not execute it. Tell the user the trade was cancelled and nothing was executed.';
+            } else if (isFundMovement) {
+              blockedMsg = guardrailResult.proposal ?? '';
+            } else {
+              // Build price-verified citation for the guardrail message
+              const _guardPriceV = verifyTradePrice({
+                symbol: (toolInput as unknown as TradeGuardrailInput).symbol,
+                proposedPrice: (toolInput as unknown as TradeGuardrailInput).unitPrice,
+                toolResults
+              });
+              blockedMsg = guardrailResult.proposal ?? formatTradeProposal(
+                toolInput as unknown as TradeGuardrailInput,
+                { priceCitation: _guardPriceV.citationText, priceWarning: _guardPriceV.warning }
+              );
+            }
+
+            // Store deterministic fallback for the confirmation prompt
+            if (!guardrailResult.cancelled) {
+              if (isFundMovement) {
+                const fi = toolInput as unknown as FundMovementGuardrailInput;
+                const action = fi.type?.toUpperCase() === 'WITHDRAWAL' ? 'withdraw' : 'deposit';
+                const currency = fi.currency ?? 'USD';
+                tradeProposalForFallback =
+                  `I'd like to ${action} the following funds — please confirm:\n\n` +
+                  `**${fi.type?.toUpperCase()} $${Number(fi.amount).toFixed(2)} ${currency}**\n\n` +
+                  `This is simulated — no real money involved. ` +
+                  `Reply 'yes' to confirm, or 'cancel' to abort.`;
               } else {
-                // Build price-verified citation for the guardrail message
-                const _guardPriceV = verifyTradePrice({
-                  symbol: (toolInput as unknown as TradeGuardrailInput).symbol,
-                  proposedPrice: (toolInput as unknown as TradeGuardrailInput).unitPrice,
+                const ti = toolInput as unknown as TradeGuardrailInput;
+
+                const priceVerification = verifyTradePrice({
+                  symbol: ti.symbol,
+                  proposedPrice: ti.unitPrice,
                   toolResults
                 });
-                blockedMsg = guardrailResult.proposal ?? formatTradeProposal(
-                  toolInput as unknown as TradeGuardrailInput,
-                  { priceCitation: _guardPriceV.citationText, priceWarning: _guardPriceV.warning }
-                );
+
+                const confirmedPrice = priceVerification.marketPrice ?? ti.unitPrice;
+                const total = ti.quantity * confirmedPrice;
+                const priceAnnotation = priceVerification.citationText
+                  ? ` (${priceVerification.citationText})`
+                  : '';
+
+                tradeProposalForFallback =
+                  `I'd like to place the following paper trade — please confirm this is what you want:\n\n` +
+                  `**${ti.side.toUpperCase()} ${ti.quantity} shares of ${ti.symbol.toUpperCase()}** ` +
+                  `at $${confirmedPrice.toFixed(2)}/share${priceAnnotation} (estimated total: $${total.toFixed(2)}).\n\n` +
+                  `This is a paper trade — no real money involved. ` +
+                  `Reply 'yes' to execute, or 'cancel' to abort.` +
+                  (priceVerification.warning
+                    ? `\n\n⚠️ **Price note:** ${priceVerification.warning}`
+                    : '');
               }
-
-              // Store deterministic fallback for the confirmation prompt
-              if (!guardrailResult.cancelled) {
-                if (isFundMovement) {
-                  const fi = toolInput as unknown as FundMovementGuardrailInput;
-                  const action = fi.type?.toUpperCase() === 'WITHDRAWAL' ? 'withdraw' : 'deposit';
-                  const currency = fi.currency ?? 'USD';
-                  tradeProposalForFallback =
-                    `I'd like to ${action} the following funds — please confirm:\n\n` +
-                    `**${fi.type?.toUpperCase()} $${Number(fi.amount).toFixed(2)} ${currency}**\n\n` +
-                    `This is simulated — no real money involved. ` +
-                    `Reply 'yes' to confirm, or 'cancel' to abort.`;
-                } else {
-                  const ti = toolInput as unknown as TradeGuardrailInput;
-
-                  const priceVerification = verifyTradePrice({
-                    symbol: ti.symbol,
-                    proposedPrice: ti.unitPrice,
-                    toolResults
-                  });
-
-                  const confirmedPrice = priceVerification.marketPrice ?? ti.unitPrice;
-                  const total = ti.quantity * confirmedPrice;
-                  const priceAnnotation = priceVerification.citationText
-                    ? ` (${priceVerification.citationText})`
-                    : '';
-
-                  tradeProposalForFallback =
-                    `I'd like to place the following paper trade — please confirm this is what you want:\n\n` +
-                    `**${ti.side.toUpperCase()} ${ti.quantity} shares of ${ti.symbol.toUpperCase()}** ` +
-                    `at $${confirmedPrice.toFixed(2)}/share${priceAnnotation} (estimated total: $${total.toFixed(2)}).\n\n` +
-                    `This is a paper trade — no real money involved. ` +
-                    `Reply 'yes' to execute, or 'cancel' to abort.` +
-                    (priceVerification.warning
-                      ? `\n\n⚠️ **Price note:** ${priceVerification.warning}`
-                      : '');
-                }
-              }
-
-              toolTrace.push({
-                tool: toolUse.name,
-                ok: true,
-                ms: Date.now() - startMs
-              });
-              toolResultBlocks.push({
-                type: 'tool_result',
-                tool_use_id: toolUse.id,
-                content: JSON.stringify({ blocked: true, message: blockedMsg })
-              });
-              onEvent?.({
-                type: 'tool_end',
-                tool: toolUse.name,
-                ok: false,
-                ms: Date.now() - startMs,
-                iteration: displayIteration,
-                detail: guardrailResult.cancelled
-                  ? 'BLOCKED: trade cancelled by user'
-                  : 'BLOCKED: confirmation required'
-              });
-              continue;
             }
-          }
 
-          try {
-            const result = await executor.execute(
-              toolUse.input as Record<string, unknown>,
-              toolContext
-            );
-            toolResults.set(toolUse.name, result);
-            toolsSucceeded++;
             toolTrace.push({
               tool: toolUse.name,
               ok: true,
@@ -458,20 +612,54 @@ export class AgentService {
             toolResultBlocks.push({
               type: 'tool_result',
               tool_use_id: toolUse.id,
+              content: JSON.stringify({ blocked: true, message: blockedMsg })
+            });
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail: guardrailResult.cancelled
+                ? 'BLOCKED: trade cancelled by user'
+                : 'BLOCKED: confirmation required'
+            });
+            continue;
+          }
+
+          try {
+            const result = await executor.execute(
+              toolUse.input as Record<string, unknown>,
+              toolContext
+            );
+            toolResults.set(toolUse.name, result);
+            const writeResultError = detectToolResultError(result);
+            if (writeResultError) {
+              toolsFailed++;
+              toolTrace.push({ tool: toolUse.name, ok: false, ms: Date.now() - startMs, error: writeResultError });
+            } else {
+              toolsSucceeded++;
+              toolTrace.push({ tool: toolUse.name, ok: true, ms: Date.now() - startMs });
+            }
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
               content: JSON.stringify(result)
             });
+            const writeToolOk = !writeResultError;
             const detail =
-              toolUse.name === 'getMarketPrices' &&
+              writeResultError ??
+              (toolUse.name === 'getMarketPrices' &&
               typeof result === 'object' &&
               result &&
               'source' in result &&
               typeof (result as { source?: unknown }).source === 'string'
                 ? String((result as { source: string }).source)
-                : undefined;
+                : undefined);
             onEvent?.({
               type: 'tool_end',
               tool: toolUse.name,
-              ok: true,
+              ok: writeToolOk,
               ms: Date.now() - startMs,
               iteration: displayIteration,
               detail
@@ -584,6 +772,11 @@ export class AgentService {
           break;
         }
 
+        // Track called tools for conditional inclusion on next iteration
+        for (const tc of toolsCalled) {
+          calledToolNames.add(tc);
+        }
+
         iteration++;
       }
 
@@ -603,17 +796,27 @@ export class AgentService {
       // always regenerate — the iteration-0 text is just "Let me check the price"
       // preamble, not the confirmation prompt the user needs.
       if (terminationReason === 'trade_blocked' || (!answer && terminationReason !== 'end_turn')) {
-        const fallbackResponse = await client.messages.create({
-          model: agentConfig.anthropicModel,
-          max_tokens: agentConfig.maxTokens,
-          temperature: agentConfig.temperature,
-          system: systemPrompt,
-          messages
-          // No tools — force text response
-        });
-        totalInputTokens += fallbackResponse.usage?.input_tokens ?? 0;
-        totalOutputTokens += fallbackResponse.usage?.output_tokens ?? 0;
-        answer = this.extractText(fallbackResponse.content);
+        if (onEvent) {
+          const streamed = await this.streamFinalAnswer(client, systemPrompt, messages, onEvent);
+          totalInputTokens += streamed.inputTokens;
+          totalOutputTokens += streamed.outputTokens;
+          answer = streamed.text;
+        } else {
+          const fallbackSystemWithCache: Anthropic.TextBlockParam[] = [
+            { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }
+          ];
+          const fallbackResponse = await client.messages.create({
+            model: agentConfig.anthropicModel,
+            max_tokens: agentConfig.maxTokens,
+            temperature: agentConfig.temperature,
+            system: fallbackSystemWithCache,
+            messages
+            // No tools — force text response
+          });
+          totalInputTokens += fallbackResponse.usage?.input_tokens ?? 0;
+          totalOutputTokens += fallbackResponse.usage?.output_tokens ?? 0;
+          answer = this.extractText(fallbackResponse.content);
+        }
 
         // If LLM produced empty or generic text for a trade_blocked case,
         // use the deterministic confirmation prompt built from actual trade data.
@@ -726,6 +929,68 @@ export class AgentService {
     }
   }
 
+  /**
+   * Stream the final answer text via text_delta events using the streaming API.
+   * Falls back to a non-streaming call if streaming fails.
+   */
+  private async streamFinalAnswer(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client: any,
+    systemPrompt: string,
+    messages: Anthropic.MessageParam[],
+    onEvent: (event: AgentStreamEvent) => void
+  ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+    try {
+      const stream = client.messages.stream({
+        model: agentConfig.anthropicModel,
+        max_tokens: agentConfig.maxTokens,
+        temperature: agentConfig.temperature,
+        system: systemPrompt,
+        messages
+      });
+
+      let text = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+
+      for await (const event of stream) {
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'text_delta'
+        ) {
+          onEvent({ type: 'text_delta', text: event.delta.text });
+          text += event.delta.text;
+        }
+      }
+
+      const finalMessage = await stream.finalMessage();
+      inputTokens = finalMessage.usage?.input_tokens ?? 0;
+      outputTokens = finalMessage.usage?.output_tokens ?? 0;
+
+      return { text, inputTokens, outputTokens };
+    } catch {
+      // Fallback: non-streaming call
+      const response = await client.messages.create({
+        model: agentConfig.anthropicModel,
+        max_tokens: agentConfig.maxTokens,
+        temperature: agentConfig.temperature,
+        system: systemPrompt,
+        messages
+      });
+      const text = response.content
+        .filter((b: { type: string }) => b.type === 'text')
+        .map((b: { text: string }) => b.text)
+        .join('\n');
+      // Emit full text as a single delta for backward compatibility
+      onEvent({ type: 'text_delta', text });
+      return {
+        text,
+        inputTokens: response.usage?.input_tokens ?? 0,
+        outputTokens: response.usage?.output_tokens ?? 0
+      };
+    }
+  }
+
   private extractText(content: Anthropic.ContentBlock[]): string {
     return content
       .filter((block): block is Anthropic.TextBlock => block.type === 'text')
@@ -748,6 +1013,15 @@ export class AgentService {
     // trade confirmation and user message is neither confirm nor cancel),
     // skip ALL synthetic tools so the LLM handles it conversationally.
     if (this.isPendingTradeModification(message, conversationHistory)) {
+      return [];
+    }
+
+    // If the user is asking a broad strategy question, skip synthetic tools
+    // so the LLM asks follow-up questions (goals, risk tolerance, time horizon)
+    // before fetching data. Only suppress on the FIRST message — if there's
+    // conversation history, the user may be answering follow-ups.
+    const isFirstMessage = !conversationHistory || conversationHistory.length === 0;
+    if (isFirstMessage && this.isBroadStrategyIntent(message.toLowerCase())) {
       return [];
     }
 
@@ -804,6 +1078,33 @@ export class AgentService {
 
   private isNewsOrStrategyIntent(lowerMessage: string): boolean {
     return /\b(news|strateg|research|what.s\s+happening|recent|headline|earning|sentiment)\b/.test(lowerMessage);
+  }
+
+  /**
+   * Detect broad strategy questions where the agent should ask follow-up
+   * questions (goals, risk tolerance, time horizon) before fetching data.
+   * Does NOT match narrow factual questions like "what % is AAPL?"
+   */
+  private isBroadStrategyIntent(lowerMessage: string): boolean {
+    const strategyPatterns = [
+      /\b(rebalance|rebalancing)\b/,
+      /\bwhat\s+should\s+i\s+(do|consider|change|adjust)\b/,
+      /\b(improve|optimize|diversif)\b.*\bportfolio\b/,
+      /\bportfolio\b.*\b(improve|optimize|diversif|strategy|strateg)\b/,
+      /\b(investment|investing)\s+(strategy|plan|approach|idea)\b/,
+      /\bhow\s+(can|should|do)\s+i\s+(improve|grow|protect|diversify)\b/,
+      /\bmore\s+(aggressive|conservative|diversified|balanced)\b/,
+      /\bsuggest.*\b(allocation|strategy|approach|change)\b/,
+      /\badvice\b.*\bportfolio\b/,
+      /\bportfolio\b.*\b(advice|guidance|suggestion|recommendation)\b/,
+      /\bwhat\s+would\s+you\s+(suggest|recommend|advise)\b/,
+      /\b(get|getting)\s+started\s+(with|in)\s+(invest|stock|trading|portfolio)/,
+      /\bhow\s+to\s+(start|begin)\s+(invest|trading|stock|building)/,
+      /\b(new|beginner|beginning)\s+(invest|trader|portfolio)/,
+      /\bwhere\s+(do|should)\s+i\s+(start|begin)\b/,
+      /\bhow\s+(do|can|should)\s+i\s+(start|begin)\s+(invest|trading|building)/
+    ];
+    return strategyPatterns.some((p) => p.test(lowerMessage));
   }
 
   private extractMentionedSymbols(lowerMessage: string): string[] {

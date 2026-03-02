@@ -418,13 +418,30 @@ async function runCase(
     const { answer, toolTrace, confidence, data } = response;
     const checks: CheckResult[] = [];
 
-    // Detect unavailable data early: if allow_unavailable and (tools failed OR
-    // answer indicates unavailability), skip must_contain / must_not_contain
+    // ─── Tool health check ──────────────────────────────────────────
+    // Detect tools that errored (not called or ok:false). Tool errors
+    // always produce a failing check — allow_unavailable does NOT forgive
+    // tool crashes/errors, only graceful "no data" from succeeded tools.
     const normalizedForUnavail = normalizeForAssert(answer);
-    const toolTraceFailed = evalCase.expected_tools.some((t) => {
+    const toolsWithErrors = evalCase.expected_tools.filter((t) => {
       const trace = toolTrace.find((tr) => tr.tool === t);
-      return !trace || !trace.ok;
+      return trace && !trace.ok;
     });
+    if (toolsWithErrors.length > 0) {
+      const errorDetails = toolsWithErrors.map((t) => {
+        const trace = toolTrace.find((tr) => tr.tool === t);
+        return `${t}${trace?.error ? `: ${trace.error}` : ''}`;
+      });
+      checks.push({
+        check: 'tool_health',
+        passed: false,
+        detail: `✗ tool(s) returned errors: ${errorDetails.join('; ')} — tool errors always fail`
+      });
+    }
+
+    // dataUnavailable only activates when allow_unavailable is set AND
+    // no tools errored AND the answer indicates data was unavailable.
+    // This forgives content checks only for graceful "no data" scenarios.
     const answerIndicatesUnavailable =
       evalCase.if_unavailable_must_contain?.length
         ? evalCase.if_unavailable_must_contain.some((p) =>
@@ -433,7 +450,8 @@ async function runCase(
         : false;
     const dataUnavailable =
       evalCase.allow_unavailable === true &&
-      (toolTraceFailed || answerIndicatesUnavailable);
+      toolsWithErrors.length === 0 &&
+      answerIndicatesUnavailable;
 
     // 1. Tool selection
     checks.push(...checkToolSelection(evalCase.expected_tools, toolTrace));

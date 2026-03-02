@@ -27,6 +27,9 @@ interface PortfolioDetailsLike {
   hasErrors?: boolean;
 }
 
+const snapshotCache = new Map<string, { data: PortfolioSnapshotResult; ts: number }>();
+const SNAPSHOT_CACHE_TTL_MS = 60_000; // 60 seconds — covers entire request lifecycle
+
 export class GetPortfolioSnapshotTool extends BaseTool {
   public static readonly DEFINITION: AgentToolDefinition = {
     name: 'getPortfolioSnapshot',
@@ -51,11 +54,22 @@ export class GetPortfolioSnapshotTool extends BaseTool {
     context: ToolContext
   ): Promise<PortfolioSnapshotResult> {
     const dateRange = String(input.dateRange ?? 'max');
+
+    // Check in-memory cache (avoids redundant Ghostfolio API calls across iterations)
+    const cacheKey = `${context.userId}:${dateRange}`;
+    const cached = snapshotCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < SNAPSHOT_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
     const result = await ghostfolioGet<PortfolioDetailsLike>({
       path: `/api/v1/portfolio/details?range=${encodeURIComponent(dateRange)}`,
       jwt: context.jwt
     });
-    return this.mapToSnapshot(result, context.baseCurrency);
+    const snapshot = this.mapToSnapshot(result, context.baseCurrency);
+
+    snapshotCache.set(cacheKey, { data: snapshot, ts: Date.now() });
+    return snapshot;
   }
 
   protected onError(
