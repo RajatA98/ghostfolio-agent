@@ -112,3 +112,65 @@
     - "FILLED"
     - "trade has been logged"
     - "has been executed"
+
+# ─── getStockOverview ──────────────────────────────────────────────────
+
+- id: "sanity-overview-001"
+  query: "Give me an overview of AAPL stock."
+  expected_tools:
+    - getStockOverview
+  expected_sources:
+    - getStockOverview
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "I can't access"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+# ─── getMarketNews ─────────────────────────────────────────────────────
+
+- id: "sanity-news-001"
+  query: "What's the latest news on AAPL?"
+  expected_tools:
+    - getMarketNews
+  expected_sources:
+    - getMarketNews
+  must_contain:
+    - "AAPL"
+  must_not_contain:
+    - "not supported"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+    - "unavailable"
+
+# ─── logFundMovement ──────────────────────────────────────────────────
+
+- id: "sanity-fund-001"
+  query: "Deposit $1000 into my account."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "confirm"
+    - "$1,000"
+  must_not_contain:
+    - "deposited"
+    - "has been logged"
+
+# ─── getPortfolioData ─────────────────────────────────────────────────
+
+- id: "sanity-pdata-001"
+  query: "Show me a summary of my portfolio."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I don't know"

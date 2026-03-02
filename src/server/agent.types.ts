@@ -157,6 +157,14 @@ export type AgentStreamEvent =
       iteration: number;
       detail?: string;
     }
+  | { type: 'text_delta'; text: string }
+  | {
+      type: 'tool_detail';
+      tool: string;
+      input: Record<string, unknown>;
+      result?: unknown;
+      iteration: number;
+    }
   | {
       type: 'done';
       answer: string;

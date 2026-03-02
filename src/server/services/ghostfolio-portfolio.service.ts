@@ -55,10 +55,11 @@ export class GhostfolioPortfolioService {
 
   /**
    * Get portfolio performance metrics.
+   * Uses v2 API which requires a range parameter.
    */
-  async getPerformance(userId: string, jwt?: string): Promise<unknown> {
+  async getPerformance(userId: string, jwt?: string, range = 'max'): Promise<unknown> {
     const token = jwt ?? (await this.authService.getJwt(userId));
-    const res = await fetch(`${this.baseUrl}/api/v1/portfolio/performance`, {
+    const res = await fetch(`${this.baseUrl}/api/v2/portfolio/performance?range=${encodeURIComponent(range)}`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
@@ -70,17 +71,23 @@ export class GhostfolioPortfolioService {
 
   /**
    * Get portfolio summary statistics.
+   * Ghostfolio no longer has a dedicated summary endpoint — derive from holdings + performance.
    */
   async getSummary(userId: string, jwt?: string): Promise<unknown> {
     const token = jwt ?? (await this.authService.getJwt(userId));
-    const res = await fetch(`${this.baseUrl}/api/v1/portfolio/summary`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Ghostfolio summary API ${res.status}: ${text}`);
-    }
-    return res.json();
+    // Fetch holdings and performance to build a summary
+    const [holdingsData, perfData] = await Promise.all([
+      this.getPortfolioData(userId, token),
+      this.getPerformance(userId, token, 'max')
+    ]);
+    const perf = perfData as { performance?: { netPerformancePercentage?: number } };
+    return {
+      holdings: (holdingsData as { holdings?: unknown[] }).holdings ?? [],
+      totalValue: (holdingsData as { totalValue?: unknown }).totalValue,
+      asOf: (holdingsData as { asOf?: string }).asOf,
+      netPerformancePercentage: perf.performance?.netPerformancePercentage ?? null,
+      source: 'derived from holdings + performance'
+    };
   }
 
   /**
@@ -117,6 +124,27 @@ export class GhostfolioPortfolioService {
   }
 
   /**
+   * Resolve the user's Ghostfolio account ID.
+   * Uses the configured default, or fetches the first account from Ghostfolio.
+   */
+  private async resolveAccountId(token: string): Promise<string | undefined> {
+    if (agentConfig.defaultAccountId) {
+      return agentConfig.defaultAccountId;
+    }
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/account`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) return undefined;
+      const data = (await res.json()) as { accounts?: Array<{ id: string }> };
+      const accounts = data.accounts ?? (Array.isArray(data) ? data : []);
+      return (accounts as Array<{ id: string }>)[0]?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Log an activity (paper trade or brokerage sync) to Ghostfolio.
    * When jwt is provided directly (dev mode), skips Prisma and DB operations.
    * In production, creates a local Order record with status tracking.
@@ -149,9 +177,12 @@ export class GhostfolioPortfolioService {
       dbOrderId = order.id;
     }
 
+    // Resolve accountId: use activity's, config default, or fetch from Ghostfolio
+    const resolvedAccountId = activity.accountId || await this.resolveAccountId(token);
+
     try {
       const body = {
-        accountId: activity.accountId || agentConfig.defaultAccountId || undefined,
+        accountId: resolvedAccountId,
         comment: `Via agent (order: ${dbOrderId})`,
         currency: activity.currency ?? 'USD',
         dataSource: activity.dataSource ?? 'YAHOO',

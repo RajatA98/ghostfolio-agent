@@ -146,13 +146,20 @@ app.post('/api/chat/stream', async (req, res) => {
       sawDoneEvent = true;
     }
     res.write(`data: ${JSON.stringify(event)}\n\n`);
+    // Flush immediately so the client receives each SSE event without buffering
+    if (typeof (res as any).flush === 'function') {
+      (res as any).flush();
+    }
   };
 
   try {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
+    // Disable Nagle's algorithm for immediate delivery
+    res.socket?.setNoDelay?.(true);
 
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.userId!;

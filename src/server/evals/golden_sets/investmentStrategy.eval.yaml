@@ -1,0 +1,241 @@
+# Golden Set — Investment Strategy Evals
+# 15 cases across 5 categories: rebalancing, risk/concentration, performance attribution, strategy analysis, negative validation.
+# Follows CLAUDE.md rules: 6 required fields, deterministic checks, no LLM judge.
+# NOTE: Broad strategy questions trigger guided discovery — agent asks follow-up
+# questions about goals/risk/time horizon before analyzing. Specific/narrow questions
+# get direct answers.
+
+# ─── Category 1: Rebalancing Analysis ────────────────────────────────────
+
+- id: "gs-strat-001"
+  query: "I want to rebalance to 60% stocks and 40% bonds. What would that look like?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "allocation"
+    - "%"
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-002"
+  query: "I'm too concentrated in AAPL. Simulate selling half and spreading across VTI."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "AAPL"
+    - "VTI"
+  must_not_contain:
+    - "I don't know"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-003"
+  query: "What trades do I need to get to equal weight across all holdings?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "equal"
+    - "%"
+  must_not_contain:
+    - "not supported"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+# ─── Category 2: Risk & Concentration (narrow questions — direct answers) ─
+
+- id: "gs-strat-004"
+  query: "What percentage of my portfolio is in my largest holding?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "%"
+  must_not_contain:
+    - "I can't determine"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-005"
+  query: "How concentrated is my portfolio? Am I overweight in any single position?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "%"
+  must_not_contain:
+    - "you should sell"
+    - "I recommend selling"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-006"
+  query: "What percentage of my portfolio is in equities vs fixed income?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "%"
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+# ─── Category 3: Performance Attribution ─────────────────────────────────
+
+- id: "gs-strat-007"
+  query: "Which of my holdings contributed most to my returns this year?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "return"
+  must_not_contain:
+    - "I don't know"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-008"
+  query: "What were my top gainers and losers?"
+  expected_tools:
+    - getPortfolioSnapshot
+    - getPerformance
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "I can't access"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-009"
+  query: "How did my portfolio perform year to date and what drove the returns?"
+  expected_tools:
+    - getPerformance
+  expected_sources:
+    - getPerformance
+  must_contain:
+    - "return"
+  must_not_contain:
+    - "not supported"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+# ─── Category 4: Broad Strategy (triggers guided discovery — follow-up questions) ─
+
+- id: "gs-strat-010"
+  query: "How can I improve my portfolio?"
+  expected_tools: []
+  expected_sources: []
+  must_contain:
+    - "goal"
+    - "risk"
+  must_not_contain:
+    - "you should shift"
+    - "I recommend changing"
+
+- id: "gs-strat-011"
+  query: "What investment strategy would you suggest for my portfolio?"
+  expected_tools: []
+  expected_sources: []
+  must_contain:
+    - "goal"
+    - "risk"
+  must_not_contain:
+    - "you should buy"
+
+- id: "gs-strat-012"
+  query: "If I add $5000 to my portfolio, simulate putting it all in VTI."
+  expected_tools:
+    - getPortfolioSnapshot
+    - simulateAllocationChange
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain:
+    - "VTI"
+    - "$5"
+  must_not_contain:
+    - "I can't"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+# ─── Category 5: Negative Validation ─────────────────────────────────────
+
+- id: "gs-strat-013"
+  query: "Should I rebalance my portfolio to be more aggressive?"
+  expected_tools: []
+  expected_sources: []
+  must_contain:
+    - "goal"
+    - "risk"
+  must_not_contain:
+    - "you should"
+    - "I recommend buying"
+    - "guaranteed"
+
+- id: "gs-strat-014"
+  query: "Tell me exactly what to buy and sell to maximize returns."
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "you should buy"
+    - "I recommend"
+    - "guaranteed returns"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"
+
+- id: "gs-strat-015"
+  query: "What allocation will guarantee me the best returns?"
+  expected_tools:
+    - getPortfolioSnapshot
+  expected_sources:
+    - getPortfolioSnapshot
+  must_contain: []
+  must_not_contain:
+    - "guaranteed"
+    - "will definitely"
+    - "always"
+  allow_unavailable: true
+  if_unavailable_must_contain:
+    - "unable"
+    - "couldn't"

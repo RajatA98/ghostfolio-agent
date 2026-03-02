@@ -53,6 +53,10 @@ export class DepositWithdrawTool extends BaseTool {
       };
     }
 
+    // Ghostfolio doesn't have DEPOSIT/WITHDRAWAL order types.
+    // Map: DEPOSIT → BUY currency, WITHDRAWAL → SELL currency.
+    const orderType: 'BUY' | 'SELL' = type === 'DEPOSIT' ? 'BUY' : 'SELL';
+
     const activity: GhostfolioActivity = {
       accountId: '',
       currency,
@@ -61,7 +65,7 @@ export class DepositWithdrawTool extends BaseTool {
       fee: 0,
       quantity: amount,
       symbol: currency,
-      type,
+      type: orderType,
       unitPrice: 1
     };
 

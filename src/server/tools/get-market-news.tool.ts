@@ -51,7 +51,7 @@ async function fetchFinnhubNews(
 
   try {
     const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(10_000)
     });
 
@@ -59,27 +59,25 @@ async function fetchFinnhubNews(
       return [];
     }
 
-    const raw = (await response.json()) as Array<{
-      headline?: string;
-      summary?: string;
-      source?: string;
-      datetime?: number;
-      url?: string;
-    }>;
-
+    const raw: unknown = await response.json();
     if (!Array.isArray(raw)) return [];
 
     const articles: NewsArticle[] = raw
       .slice(0, MAX_ARTICLES)
-      .map((item) => ({
-        headline: item.headline ?? '',
-        summary: (item.summary ?? '').slice(0, MAX_SUMMARY_LENGTH),
-        source: item.source ?? 'Unknown',
-        datetime: item.datetime
-          ? new Date(item.datetime * 1000).toISOString().split('T')[0]
-          : formatDate(new Date()),
-        url: item.url ?? ''
-      }));
+      .map((item: Record<string, unknown>) => {
+        const dt = item.datetime;
+        const dateStr =
+          typeof dt === 'number' && Number.isFinite(dt)
+            ? new Date(dt * 1000).toISOString().split('T')[0]
+            : formatDate(new Date());
+        return {
+          headline: String(item.headline ?? ''),
+          summary: String(item.summary ?? '').slice(0, MAX_SUMMARY_LENGTH),
+          source: String(item.source ?? 'Unknown'),
+          datetime: dateStr,
+          url: String(item.url ?? '')
+        };
+      });
 
     newsCache.set(symbol, { articles, ts: Date.now() });
     return articles;
@@ -114,9 +112,19 @@ export class GetMarketNewsTool extends BaseTool {
     input: Record<string, unknown>,
     _context: ToolContext
   ): Promise<MarketNewsResult> {
-    const symbol = String(input.symbol).trim().toUpperCase();
-    const daysBack = Math.min(Number(input.daysBack ?? 7), 30);
+    const symbol = String(input.symbol ?? '').trim().toUpperCase();
+    const daysBack = Math.min(Math.max(0, Number(input.daysBack ?? 7)), 30);
     const now = formatDate(new Date());
+
+    if (!symbol) {
+      return {
+        symbol: '',
+        articles: [],
+        asOf: now,
+        source: 'Finnhub',
+        reasonIfUnavailable: 'Symbol is required'
+      };
+    }
 
     if (!agentConfig.finnhubApiKey) {
       return {
@@ -128,14 +136,24 @@ export class GetMarketNewsTool extends BaseTool {
       };
     }
 
-    const articles = await fetchFinnhubNews(symbol, daysBack);
-
-    return {
-      symbol,
-      articles,
-      asOf: now,
-      source: 'Finnhub',
-      reasonIfUnavailable: articles.length === 0 ? `No recent news found for ${symbol}` : null
-    };
+    try {
+      const articles = await fetchFinnhubNews(symbol, daysBack);
+      return {
+        symbol,
+        articles,
+        asOf: now,
+        source: 'Finnhub',
+        reasonIfUnavailable: articles.length === 0 ? `No recent news found for ${symbol}` : null
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        symbol,
+        articles: [],
+        asOf: now,
+        source: 'Finnhub',
+        reasonIfUnavailable: `News fetch failed: ${msg}`
+      };
+    }
   }
 }

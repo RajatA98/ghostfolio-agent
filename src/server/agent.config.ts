@@ -64,7 +64,7 @@ export const agentConfig = {
   },
 
   get timeoutMs(): number {
-    return Number(process.env.AGENT_TIMEOUT_MS || 45000);
+    return Number(process.env.AGENT_TIMEOUT_MS || 30000);
   },
 
   get costLimitTokens(): number {
