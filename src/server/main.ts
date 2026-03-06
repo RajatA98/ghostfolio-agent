@@ -12,11 +12,13 @@ import { AuthenticatedRequest, requireAuth } from './middleware/auth';
 import { requireGhostfolioSharedAuth } from './middleware/ghostfolio-shared-auth';
 import { GhostfolioUserService } from './services/ghostfolio-user.service';
 import { GhostfolioAuthService } from './services/ghostfolio-auth.service';
+import { PlaidService } from './services/plaid.service';
 
 const app = express();
 const agentService = new AgentService();
 const ghostfolioUserService = new GhostfolioUserService();
 const ghostfolioAuthService = new GhostfolioAuthService();
+const plaidService = agentConfig.plaidEnabled ? new PlaidService() : null;
 
 app.use(
   cors({
@@ -53,6 +55,71 @@ if (agentConfig.authMode !== 'ghostfolio_shared') {
     } catch (error) {
       res.status(500).json({
         error: `Signup provisioning failed: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+}
+
+// --- Plaid routes (brokerage linking) ---
+if (plaidService) {
+  app.post('/api/plaid/create-link-token', async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const linkToken = await plaidService.createLinkToken(authReq.userId!);
+      res.json({ linkToken });
+    } catch (error) {
+      res.status(500).json({
+        error: `Failed to create link token: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  app.post('/api/plaid/exchange-public-token', async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const { publicToken, institutionId, institutionName } = req.body as {
+        publicToken: string;
+        institutionId?: string;
+        institutionName?: string;
+      };
+      if (!publicToken) {
+        res.status(400).json({ error: 'publicToken is required' });
+        return;
+      }
+      const result = await plaidService.exchangePublicToken(
+        authReq.userId!,
+        publicToken,
+        institutionId,
+        institutionName
+      );
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        error: `Failed to exchange token: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  app.get('/api/plaid/holdings', async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const holdings = await plaidService.getHoldings(authReq.userId!);
+      res.json({ holdings });
+    } catch (error) {
+      res.status(500).json({
+        error: `Failed to fetch holdings: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  app.delete('/api/plaid/items/:itemId', async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      await plaidService.removeItem(authReq.userId!, req.params.itemId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({
+        error: `Failed to remove item: ${error instanceof Error ? error.message : String(error)}`
       });
     }
   });

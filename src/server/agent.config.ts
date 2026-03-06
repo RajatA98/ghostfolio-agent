@@ -130,6 +130,27 @@ export const agentConfig = {
     return process.env.GHOSTFOLIO_JWT || '';
   },
 
+  // --- Plaid ---
+  get plaidClientId(): string {
+    return process.env.PLAID_CLIENT_ID || '';
+  },
+  get plaidSecret(): string {
+    return process.env.PLAID_SECRET || '';
+  },
+  get plaidEnv(): string {
+    return process.env.PLAID_ENV || 'sandbox';
+  },
+  get plaidEnabled(): boolean {
+    return !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);
+  },
+
+  // --- Transaction Mode ---
+  /** 'paper' = simulation only (default), 'live' = real trades (future) */
+  get transactionMode(): 'paper' | 'live' {
+    const mode = process.env.AGENT_TRANSACTION_MODE || 'paper';
+    return mode === 'live' ? 'live' : 'paper';
+  },
+
   // --- Encryption ---
   get encryptionKey(): string {
     return process.env.ENCRYPTION_KEY || '';

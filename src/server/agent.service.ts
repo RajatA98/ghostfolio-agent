@@ -17,6 +17,9 @@ import { createAnthropicClient, withLangfuseTrace } from './observability';
 import {
   checkTradeConfirmation,
   checkFundMovementConfirmation,
+  checkTransactionMode,
+  checkTradeSafetyLimits,
+  checkFundMovementSafetyLimits,
   formatTradeProposal,
   TradeGuardrailInput,
   FundMovementGuardrailInput
@@ -526,9 +529,70 @@ export class AgentService {
             continue;
           }
 
-          // ─── Confirmation guardrail (trades + fund movements) ──────
+          // ─── Transaction mode guard (hard gate) ──────────────────────
+          const modeCheck = checkTransactionMode();
+          if (!modeCheck.allowed) {
+            tradeBlocked = true;
+            toolTrace.push({
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              error: modeCheck.reason
+            });
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ blocked: true, message: modeCheck.reason }),
+              is_error: true
+            });
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail: 'BLOCKED: transaction mode disallowed'
+            });
+            continue;
+          }
+
+          // ─── Safety limits guard ──────────────────────────────────────
           const toolInput = toolUse.input as Record<string, unknown>;
           const isFundMovement = toolUse.name === 'logFundMovement';
+
+          const safetyCheck = isFundMovement
+            ? checkFundMovementSafetyLimits({ amount: Number(toolInput.amount ?? 0) })
+            : checkTradeSafetyLimits({
+                quantity: Number(toolInput.quantity ?? 0),
+                unitPrice: Number(toolInput.unitPrice ?? 0)
+              });
+
+          if (!safetyCheck.allowed) {
+            tradeBlocked = true;
+            toolTrace.push({
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              error: safetyCheck.reason
+            });
+            toolResultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ blocked: true, message: safetyCheck.reason }),
+              is_error: true
+            });
+            onEvent?.({
+              type: 'tool_end',
+              tool: toolUse.name,
+              ok: false,
+              ms: Date.now() - startMs,
+              iteration: displayIteration,
+              detail: `BLOCKED: ${safetyCheck.reason}`
+            });
+            continue;
+          }
+
+          // ─── Confirmation guardrail (trades + fund movements) ──────
 
           const guardrailResult = isFundMovement
             ? checkFundMovementConfirmation(

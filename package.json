@@ -31,6 +31,7 @@
     "express": "^4.21.2",
     "langsmith": "^0.5.6",
     "marked": "^17.0.3",
+    "plaid": "^41.4.0",
     "prisma": "^5.22.0",
     "yahoo-finance2": "^2.14.0"
   },

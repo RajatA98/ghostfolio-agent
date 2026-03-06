@@ -1,10 +1,140 @@
 /**
- * Confirmation Guardrail
+ * Transaction Guardrails
  *
- * Hard code-level enforcement that prevents the LLM from executing
- * paper trades or fund movements without explicit user confirmation.
- * The LLM cannot bypass this — it runs before the tool executor.
+ * Two layers of hard code-level enforcement:
+ *
+ * 1. **Transaction Mode Guard** — enforces AGENT_TRANSACTION_MODE.
+ *    In 'paper' mode (the default and only supported mode), ALL transactions
+ *    are simulated. The guard hard-blocks any attempt to execute real-money
+ *    operations regardless of what the LLM requests. This cannot be bypassed
+ *    by prompt injection — it runs in application code before any tool executor.
+ *
+ * 2. **Confirmation Guardrail** — requires explicit user confirmation before
+ *    even simulated trades are executed. The LLM must first propose the trade,
+ *    then the user must explicitly confirm with "yes" / "confirm" / etc.
  */
+
+import { agentConfig } from './agent.config';
+
+// ─── Transaction Mode Guard ──────────────────────────────────────────
+
+export type TransactionMode = 'paper' | 'live';
+
+export interface TransactionModeCheckResult {
+  allowed: boolean;
+  mode: TransactionMode;
+  reason: string;
+}
+
+/**
+ * Hard gate: checks whether the current transaction mode permits execution.
+ * In 'paper' mode, only simulated (paper) trades are allowed.
+ * 'live' mode is defined but NOT implemented — calling with live mode
+ * always returns blocked with an explicit error.
+ *
+ * This function is the FIRST check before any trade or fund movement.
+ * It cannot be influenced by LLM output or user messages.
+ */
+export function checkTransactionMode(): TransactionModeCheckResult {
+  const mode = agentConfig.transactionMode;
+
+  if (mode === 'paper') {
+    return {
+      allowed: true,
+      mode,
+      reason: 'Paper trading mode — all transactions are simulated.'
+    };
+  }
+
+  // 'live' mode: hard block. Even if someone sets AGENT_TRANSACTION_MODE=live,
+  // we refuse to execute until live trading is properly implemented with
+  // additional safety layers (brokerage API integration, risk limits, etc.)
+  return {
+    allowed: false,
+    mode,
+    reason:
+      'BLOCKED: Live trading is not implemented. All transactions must be in paper (simulation) mode. ' +
+      'Set AGENT_TRANSACTION_MODE=paper or remove the variable to use the safe default.'
+  };
+}
+
+/**
+ * Validates that a trade amount doesn't exceed safety limits.
+ * Even in paper mode, we cap individual trades to prevent nonsensical values
+ * from LLM hallucination (e.g. "buy 999999999 shares").
+ */
+export function checkTradeSafetyLimits(input: {
+  quantity: number;
+  unitPrice: number;
+}): TransactionModeCheckResult {
+  const MAX_SINGLE_TRADE_VALUE = 10_000_000; // $10M cap for paper trades
+  const MAX_QUANTITY = 1_000_000; // 1M shares max
+
+  const tradeValue = input.quantity * input.unitPrice;
+
+  if (input.quantity > MAX_QUANTITY) {
+    return {
+      allowed: false,
+      mode: agentConfig.transactionMode,
+      reason: `BLOCKED: Quantity ${input.quantity} exceeds maximum of ${MAX_QUANTITY.toLocaleString()} per trade.`
+    };
+  }
+
+  if (tradeValue > MAX_SINGLE_TRADE_VALUE) {
+    return {
+      allowed: false,
+      mode: agentConfig.transactionMode,
+      reason: `BLOCKED: Trade value $${tradeValue.toLocaleString()} exceeds maximum of $${MAX_SINGLE_TRADE_VALUE.toLocaleString()} per trade.`
+    };
+  }
+
+  if (input.quantity <= 0 || input.unitPrice <= 0) {
+    return {
+      allowed: false,
+      mode: agentConfig.transactionMode,
+      reason: 'BLOCKED: Quantity and unit price must be positive numbers.'
+    };
+  }
+
+  return {
+    allowed: true,
+    mode: agentConfig.transactionMode,
+    reason: 'Trade within safety limits.'
+  };
+}
+
+/**
+ * Validates fund movement amounts.
+ */
+export function checkFundMovementSafetyLimits(input: {
+  amount: number;
+}): TransactionModeCheckResult {
+  const MAX_FUND_MOVEMENT = 10_000_000; // $10M cap
+
+  if (input.amount <= 0) {
+    return {
+      allowed: false,
+      mode: agentConfig.transactionMode,
+      reason: 'BLOCKED: Fund movement amount must be positive.'
+    };
+  }
+
+  if (input.amount > MAX_FUND_MOVEMENT) {
+    return {
+      allowed: false,
+      mode: agentConfig.transactionMode,
+      reason: `BLOCKED: Fund movement $${input.amount.toLocaleString()} exceeds maximum of $${MAX_FUND_MOVEMENT.toLocaleString()}.`
+    };
+  }
+
+  return {
+    allowed: true,
+    mode: agentConfig.transactionMode,
+    reason: 'Fund movement within safety limits.'
+  };
+}
+
+// ─── Confirmation Guardrail ──────────────────────────────────────────
 
 export interface TradeGuardrailInput {
   symbol: string;
