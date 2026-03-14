@@ -45,7 +45,7 @@ export async function withLangfuseTrace<T>(options: {
         span.update({
           metadata: {
             userId: options.userId,
-            project: 'ghostfolio-agent'
+            project: 'portfolio-analyzer'
           },
           input: options.input
         });

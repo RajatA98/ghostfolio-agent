@@ -6,19 +6,13 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import { agentConfig } from './agent.config';
-import { AgentService } from './agent.service';
+import { AgentService, StreamEvent } from './agent.service';
 import { AgentChatRequest } from './agent.types';
 import { AuthenticatedRequest, requireAuth } from './middleware/auth';
-import { GhostfolioUserService } from './services/ghostfolio-user.service';
-import { GhostfolioAuthService } from './services/ghostfolio-auth.service';
-import { GhostfolioPortfolioService } from './services/ghostfolio-portfolio.service';
-import { PlaidService } from './services/plaid.service';
-import { SyncService } from './services/sync.service';
+import { SnapTradeService } from './services/snaptrade.service';
 
 const app = express();
 const agentService = new AgentService();
-const ghostfolioUserService = new GhostfolioUserService();
-const ghostfolioAuthService = new GhostfolioAuthService();
 
 app.use(
   cors({
@@ -32,6 +26,17 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// --- SnapTrade callback (no auth — loaded in popup after brokerage connect) ---
+app.get('/snaptrade/callback', (_req, res) => {
+  res.send(`<!DOCTYPE html><html><body>
+<p>Brokerage connected! This window will close automatically.</p>
+<script>
+  if (window.opener) window.opener.postMessage('snaptrade-connected', '*');
+  setTimeout(() => window.close(), 500);
+</script>
+</body></html>`);
+});
+
 // --- All /api routes require Supabase auth ---
 app.use('/api', requireAuth);
 
@@ -41,59 +46,11 @@ app.get('/api/auth/status', (req, res) => {
   res.json({ authenticated: true, userId: authReq.userId });
 });
 
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const authReq = req as AuthenticatedRequest;
-    await ghostfolioUserService.createGhostfolioAccount(authReq.userId!);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({
-      error: `Signup provisioning failed: ${error instanceof Error ? error.message : String(error)}`
-    });
-  }
-});
-
 // --- Chat route ---
 app.post('/api/chat', async (req, res) => {
   try {
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.userId!;
-
-    // Get per-user Ghostfolio JWT
-    let jwt: string;
-    if (authReq.devJwt) {
-      // Dev mode: use the raw JWT passed directly in the Authorization header
-      jwt = authReq.devJwt;
-    } else {
-      try {
-        jwt = await ghostfolioAuthService.getJwt(userId);
-      } catch {
-        // If JWT fetch fails, try full provisioning
-        try {
-          jwt = await ghostfolioUserService.ensureProvisioned(userId);
-        } catch (provisionError) {
-          // Fallback: use GHOSTFOLIO_JWT from env (single-tenant mode)
-          if (agentConfig.ghostfolioJwt) {
-            jwt = agentConfig.ghostfolioJwt;
-          } else {
-            const msg = provisionError instanceof Error ? provisionError.message : String(provisionError);
-            if (msg.includes('GHOSTFOLIO_ADMIN_TOKEN') || msg.includes('required')) {
-              res.status(503).json({
-                error: 'Agent request failed: Ghostfolio is not configured (missing GHOSTFOLIO_ADMIN_TOKEN).'
-              });
-              return;
-            }
-            if (msg.includes('Ghostfolio auth failed') || msg.includes('Failed to create Ghostfolio user')) {
-              res.status(503).json({
-                error: 'Agent request failed: Cannot reach Ghostfolio. Check GHOSTFOLIO_API_URL is correct and the service is running.'
-              });
-              return;
-            }
-            throw provisionError;
-          }
-        }
-      }
-    }
 
     const body = req.body as AgentChatRequest;
     if (!body?.message || typeof body.message !== 'string') {
@@ -103,33 +60,98 @@ app.post('/api/chat', async (req, res) => {
 
     const response = await agentService.chat(body, {
       userId,
+      supabaseUserId: authReq.supabaseUserId,
       baseCurrency: body.baseCurrency ?? 'USD',
-      language: body.language ?? 'en',
-      jwt
+      language: body.language ?? 'en'
     });
 
     res.json(response);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    const isNetwork = /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|Load failed/i.test(msg);
     res.status(500).json({
-      error: isNetwork
-        ? 'Agent request failed: Cannot reach Ghostfolio. Check GHOSTFOLIO_API_URL and that the Ghostfolio instance is running.'
-        : `Agent request failed: ${msg}`
+      error: `Agent request failed: ${msg}`
     });
   }
 });
 
-// --- Plaid routes (conditionally available) ---
-if (agentConfig.enablePlaid) {
-  const plaidService = new PlaidService();
-  const portfolioService = new GhostfolioPortfolioService(ghostfolioAuthService);
-  const syncService = new SyncService(plaidService, portfolioService);
+// --- Streaming chat route (SSE) ---
+app.post('/api/chat/stream', async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const userId = authReq.userId!;
 
-  app.post('/api/plaid/link-token', async (req, res) => {
+  const body = req.body as AgentChatRequest;
+  if (!body?.message || typeof body.message !== 'string') {
+    res.status(400).json({ error: 'message is required' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const sendSSE = (event: StreamEvent) => {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  try {
+    const response = await agentService.chat(
+      body,
+      {
+        userId,
+        supabaseUserId: authReq.supabaseUserId,
+        baseCurrency: body.baseCurrency ?? 'USD',
+        language: body.language ?? 'en'
+      },
+      sendSSE
+    );
+
+    // Send final done event
+    sendSSE({
+      type: 'done',
+      answer: response.answer,
+      confidence: response.confidence,
+      warnings: response.warnings,
+      toolTrace: response.toolTrace,
+      loopMeta: response.loopMeta
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    sendSSE({ type: 'error', message: msg });
+  }
+
+  res.end();
+});
+
+// --- SnapTrade routes (conditionally available) ---
+if (agentConfig.enableSnapTrade) {
+  const snapTradeService = new SnapTradeService();
+
+  app.post('/api/snaptrade/register', async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const result = await plaidService.createLinkToken(authReq.userId!);
+      console.log('[snaptrade/register] userId:', authReq.userId, 'supabaseUserId:', authReq.supabaseUserId);
+      const result = await snapTradeService.registerUser(authReq.userId!, authReq.supabaseUserId!);
+      res.json({ snaptradeUserId: result.snaptradeUserId });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      // Log full error for debugging
+      console.error('[snaptrade/register] error:', error);
+      // Try to extract SnapTrade API error body
+      const apiBody = (error as { body?: unknown })?.body ?? (error as { response?: { data?: unknown } })?.response?.data;
+      res.status(500).json({
+        error: apiBody ? JSON.stringify(apiBody) : msg
+      });
+    }
+  });
+
+  app.get('/api/snaptrade/connect-url', async (req, res) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const protocol = req.headers['x-forwarded-proto'] ?? req.protocol;
+      const host = req.headers['x-forwarded-host'] ?? req.get('host');
+      const callbackUrl = `${protocol}://${host}/snaptrade/callback`;
+      const result = await snapTradeService.getConnectUrl(authReq.userId!, authReq.supabaseUserId!, callbackUrl);
       res.json(result);
     } catch (error) {
       res.status(500).json({
@@ -138,25 +160,11 @@ if (agentConfig.enablePlaid) {
     }
   });
 
-  app.post('/api/plaid/exchange-token', async (req, res) => {
+  app.get('/api/snaptrade/connections', async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const body = req.body as {
-        publicToken: string;
-        institutionId?: string;
-        institutionName?: string;
-      };
-      if (!body?.publicToken) {
-        res.status(400).json({ error: 'publicToken is required' });
-        return;
-      }
-      const result = await plaidService.exchangePublicToken(
-        authReq.userId!,
-        body.publicToken,
-        body.institutionId,
-        body.institutionName
-      );
-      res.json({ success: true, itemId: result.itemId });
+      const connections = await snapTradeService.listConnections(authReq.userId!, authReq.supabaseUserId!);
+      res.json({ connections });
     } catch (error) {
       res.status(500).json({
         error: error instanceof Error ? error.message : String(error)
@@ -164,11 +172,11 @@ if (agentConfig.enablePlaid) {
     }
   });
 
-  app.get('/api/plaid/holdings', async (req, res) => {
+  app.get('/api/snaptrade/accounts', async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const result = await plaidService.getHoldings(authReq.userId!);
-      res.json(result);
+      const accounts = await snapTradeService.listAccounts(authReq.userId!, authReq.supabaseUserId!);
+      res.json({ accounts });
     } catch (error) {
       res.status(500).json({
         error: error instanceof Error ? error.message : String(error)
@@ -176,15 +184,10 @@ if (agentConfig.enablePlaid) {
     }
   });
 
-  app.post('/api/plaid/sync', async (req, res) => {
+  app.get('/api/snaptrade/holdings', async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      const body = req.body as { itemId: string };
-      if (!body?.itemId) {
-        res.status(400).json({ error: 'itemId is required' });
-        return;
-      }
-      const result = await syncService.syncHoldingsToGhostfolio(authReq.userId!, body.itemId);
+      const result = await snapTradeService.getHoldings(authReq.userId!, authReq.supabaseUserId!);
       res.json(result);
     } catch (error) {
       res.status(500).json({
@@ -213,7 +216,7 @@ if (hasBuiltClient) {
 // --- Start ---
 app.listen(agentConfig.port, () => {
   // eslint-disable-next-line no-console
-  console.log(`Ghostfolio Agent listening on http://localhost:${agentConfig.port}`);
+  console.log(`Portfolio Analyzer listening on http://localhost:${agentConfig.port}`);
 });
 
 // Catch unhandled errors so Railway logs show them

@@ -1,8 +1,8 @@
 export interface ToolContext {
   userId: string;
+  supabaseUserId?: string;
   baseCurrency: string;
   impersonationId?: string;
-  jwt: string;
 }
 
 export interface ToolExecutor {
@@ -22,7 +22,6 @@ export interface RegisteredTool {
   definition: AgentToolDefinition;
   executor: ToolExecutor;
   enabled: boolean;
-  requiresConfirmation?: boolean;
 }
 
 export class ToolRegistry {
@@ -46,9 +45,5 @@ export class ToolRegistry {
     }
 
     return tool?.executor;
-  }
-
-  public needsConfirmation(name: string): boolean {
-    return this.tools.get(name)?.requiresConfirmation === true;
   }
 }

@@ -2,19 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { agentConfig } from '../agent.config';
 import { getPrisma } from '../lib/prisma';
-import { GhostfolioUserService } from '../services/ghostfolio-user.service';
 
 export interface AuthenticatedRequest extends Request {
   userId?: string; // internal Prisma User.id
   supabaseUserId?: string;
-  /** In dev fallback mode, this holds the raw JWT for Ghostfolio API calls */
-  devJwt?: string;
 }
 
-const ghostfolioUserService = new GhostfolioUserService();
-
 /**
- * Dev fallback: when Supabase is not configured, allow direct JWT auth
+ * Dev fallback: when Supabase is not configured, allow direct token auth
  * (for local development and evals).
  */
 function isDevMode(): boolean {
@@ -24,7 +19,7 @@ function isDevMode(): boolean {
 /**
  * Auth middleware.
  * - Production: Supabase auth (expects `Authorization: Bearer <supabase_access_token>`)
- * - Dev fallback: Direct JWT auth when Supabase is not configured
+ * - Dev fallback: Direct token auth when Supabase is not configured
  */
 export async function requireAuth(
   req: AuthenticatedRequest,
@@ -41,20 +36,19 @@ export async function requireAuth(
     return;
   }
 
-  // Dev fallback: skip Supabase, use JWT directly
+  // Dev fallback: skip Supabase, use token directly
   if (isDevMode()) {
     req.userId = 'dev-user';
-    req.devJwt = token;
+    req.supabaseUserId = 'dev-user';
     next();
     return;
   }
 
-  // Eval/dev bypass: if token matches GHOSTFOLIO_JWT or EVAL_JWT, skip Supabase
+  // Eval/dev bypass: if token matches EVAL_JWT, skip Supabase
   const evalJwt = process.env.EVAL_JWT || '';
-  const ghostfolioJwt = process.env.GHOSTFOLIO_JWT || '';
-  if ((evalJwt && token === evalJwt) || (ghostfolioJwt && token === ghostfolioJwt)) {
+  if (evalJwt && token === evalJwt) {
     req.userId = 'dev-user';
-    req.devJwt = token;
+    req.supabaseUserId = 'dev-user';
     next();
     return;
   }
@@ -76,22 +70,12 @@ export async function requireAuth(
     let user = await prisma.user.findUnique({ where: { supabaseUserId } });
 
     if (!user) {
-      // Create user record
       user = await prisma.user.create({
         data: {
           supabaseUserId,
           email
         }
       });
-
-      // Provision Ghostfolio account transparently (non-fatal)
-      try {
-        await ghostfolioUserService.createGhostfolioAccount(user.id);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('Failed to auto-provision Ghostfolio account:', err instanceof Error ? err.message : err);
-        // Non-fatal: account can be provisioned later on first chat
-      }
     }
 
     req.userId = user.id;

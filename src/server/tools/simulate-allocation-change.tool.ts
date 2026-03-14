@@ -6,20 +6,8 @@ import {
   SimulateAllocationResult,
   ValuationMethod
 } from '../agent.types';
-import { ghostfolioGet } from './http';
+import { PortfolioService } from '../services/portfolio.service';
 import { AgentToolDefinition, ToolContext, ToolExecutor } from './tool-registry';
-
-interface PortfolioPositionLike {
-  symbol: string;
-  quantity: number;
-  investment?: number;
-  marketPrice?: number;
-  valueInBaseCurrency?: number;
-}
-
-interface PortfolioDetailsLike {
-  holdings: Record<string, PortfolioPositionLike>;
-}
 
 export class SimulateAllocationChangeTool implements ToolExecutor {
   public static readonly DEFINITION: AgentToolDefinition = {
@@ -67,26 +55,28 @@ export class SimulateAllocationChangeTool implements ToolExecutor {
     }
   };
 
+  constructor(private readonly portfolioService: PortfolioService) {}
+
   public async execute(
     input: Record<string, unknown>,
     context: ToolContext
   ): Promise<SimulateAllocationResult> {
     const changes = (input.changes as AllocationChange[]) ?? [];
 
-    const details = await ghostfolioGet<PortfolioDetailsLike>({
-      path: '/api/v1/portfolio/details?range=max',
-      jwt: context.jwt
-    });
+    const snapshot = await this.portfolioService.getSnapshot(
+      context.userId,
+      context.baseCurrency,
+      context.supabaseUserId
+    );
 
-    const positions = Object.values(details.holdings ?? {});
     const notes: string[] = [];
-
     const valueMap = new Map<string, Big>();
-    for (const pos of positions) {
-      if (pos.quantity > 0 || (pos.valueInBaseCurrency ?? 0) > 0) {
+
+    for (const h of snapshot.holdings) {
+      if (h.quantity > 0 || (h.value?.amount ?? 0) > 0) {
         valueMap.set(
-          pos.symbol,
-          new Big(pos.valueInBaseCurrency ?? pos.investment ?? 0)
+          h.symbol,
+          new Big(h.value?.amount ?? h.costBasis?.amount ?? 0)
         );
       }
     }
@@ -142,16 +132,13 @@ export class SimulateAllocationChangeTool implements ToolExecutor {
 
     newAllocationBySymbol.sort((a, b) => b.percent - a.percent);
 
-    const isPriceDataMissing = positions.some(
-      (pos) => pos.marketPrice === 0 || pos.marketPrice == null
-    );
-    const valuationMethod: ValuationMethod = isPriceDataMissing
+    const valuationMethod: ValuationMethod = snapshot.isPriceDataMissing
       ? 'cost_basis'
       : 'market';
     const now = new Date().toISOString().split('T')[0];
 
     return {
-      accountId: 'default',
+      accountId: 'snaptrade',
       timeframe: { start: '', end: now },
       valuationMethod,
       asOf: valuationMethod === 'market' ? now : null,

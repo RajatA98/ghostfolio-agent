@@ -120,7 +120,6 @@ export interface AgentLoopMeta {
     | 'timeout'
     | 'cost_limit'
     | 'circuit_breaker'
-    | 'trade_blocked'
     | 'error';
 }
 
@@ -139,76 +138,22 @@ export interface AgentChatResponse {
   loopMeta?: AgentLoopMeta;
 }
 
-// --- Plaid ---
+// --- Brokerage ---
 
-export interface PlaidHolding {
+export interface BrokerageHolding {
   symbol: string;
   name: string;
   quantity: number;
-  costBasis: Money | null;
-  currentValue: Money | null;
+  costBasis: number | null;
+  currentValue: number | null;
+  currency: string;
   institutionName: string;
 }
 
-export interface PlaidHoldingsResult {
-  holdings: PlaidHolding[];
-  institution: string;
-  lastSynced: IsoDate;
+export interface BrokerageService {
+  getHoldings(userId: string, supabaseUserId: string): Promise<{ holdings: BrokerageHolding[] }>;
 }
 
 export interface ConnectBrokerageResult {
-  linkToken: string;
-  expiration: string;
-}
-
-export interface SyncResult {
-  synced: number;
-  skipped: number;
-}
-
-export interface GhostfolioActivity {
-  accountId: string;
-  currency: string;
-  dataSource: 'YAHOO';
-  date: string;
-  fee: number;
-  quantity: number;
-  symbol: string;
-  type: 'BUY' | 'SELL';
-  unitPrice: number;
-}
-
-// --- Paper Trading (via Ghostfolio) ---
-
-export interface PaperTradeInput {
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  quantity: number;
-  unitPrice: number;
-  currency?: string;
-}
-
-export interface PaperTradeResult {
-  orderId: string;
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  quantity: number;
-  unitPrice: number;
-  currency: string;
-  status: string;
-  ghostfolioSynced: boolean;
-}
-
-export interface PortfolioReadResult {
-  holdings: Array<{
-    symbol: string;
-    name?: string | null;
-    quantity: number;
-    marketPrice: number;
-    marketValue: number;
-    currency: string;
-    allocationPercent: number;
-  }>;
-  totalValue: Money;
-  asOf: IsoDate;
+  redirectURI: string;
 }

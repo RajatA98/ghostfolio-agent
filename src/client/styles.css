@@ -235,16 +235,177 @@ body {
   color: #ff3333;
 }
 
-/* ── Main container ── */
-.container {
-  max-width: 960px;
-  margin: 0 auto;
+/* ── Split Layout ── */
+.splitLayout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Terminal Panel (left) ── */
+.terminalPanel {
+  flex: 1;
+  min-width: 0;
   padding: 0 16px 16px;
   display: flex;
   flex-direction: column;
-  flex: 1;
   min-height: 0;
-  width: 100%;
+}
+
+/* ── Dashboard Panel (right) ── */
+.dashboardPanel {
+  width: 360px;
+  flex-shrink: 0;
+  border-left: 1px solid #333;
+  overflow-y: auto;
+  background: #0d0d0d;
+}
+
+.dashboardPanel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dashboardPanel::-webkit-scrollbar-track {
+  background: #111;
+}
+
+.dashboardPanel::-webkit-scrollbar-thumb {
+  background: #333;
+}
+
+.dashboardHeader {
+  padding: 10px 16px;
+  font-size: 12px;
+  color: #ff6600;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border-bottom: 1px solid #333;
+  background: #111;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.dashboardCard {
+  padding: 16px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.cardLabel {
+  font-size: 10px;
+  color: #666;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.cardValue {
+  font-size: 24px;
+  font-weight: 700;
+  color: #33ff33;
+  letter-spacing: 1px;
+}
+
+/* ── Allocation chart ── */
+#allocationChart {
+  display: block;
+  width: 200px;
+  height: 200px;
+  margin: 0 auto 12px;
+}
+
+.allocationLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.legendItem {
+  font-size: 10px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legendDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legendPct {
+  color: #666;
+}
+
+/* ── Performance ── */
+.performanceValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: #c8c8c8;
+  letter-spacing: 0.5px;
+}
+
+.performanceValue.positive {
+  color: #33ff33;
+}
+
+.performanceValue.negative {
+  color: #ff3333;
+}
+
+.performanceLabel {
+  font-size: 10px;
+  color: #666;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+/* ── Holdings table ── */
+.holdingsTable {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.holdingRow {
+  display: grid;
+  grid-template-columns: 70px 50px 1fr;
+  padding: 4px 0;
+  font-size: 11px;
+  border-bottom: 1px solid #1a1a1a;
+  gap: 8px;
+}
+
+.holdingRow.holdingHeader {
+  color: #555;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #333;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+}
+
+.holdingSymbol {
+  color: #ff9900;
+  font-weight: 700;
+}
+
+.holdingQty {
+  text-align: right;
+  color: #888;
+}
+
+.holdingValue {
+  text-align: right;
+  color: #33ff33;
 }
 
 /* ── Brokerage connect section ── */
@@ -253,8 +414,6 @@ body {
   padding: 8px 12px;
   background: #1a1a1a;
   border: 1px solid #333;
-  display: flex;
-  align-items: center;
 }
 
 .brokerageRow {
@@ -262,6 +421,18 @@ body {
   align-items: center;
   gap: 12px;
   width: 100%;
+}
+
+.brokerageStatusIndicator {
+  font-size: 11px;
+  color: #ff3333;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+.brokerageStatusIndicator.connected {
+  color: #33ff33;
 }
 
 #connectBrokerageBtn {
@@ -288,6 +459,31 @@ body {
   color: #33ff33;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* ── Linked accounts ── */
+.linkedAccounts {
+  padding: 6px 0 0 0;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.linkedAccount {
+  font-size: 10px;
+  color: #33ff33;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.linkedAccountDot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #33ff33;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
 /* ── Messages area ── */
@@ -342,16 +538,346 @@ body {
 }
 
 .message .msgContent {
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ── Plain text (user messages) ── */
+.msgContent--plain {
+  white-space: pre-wrap;
 }
 
 .message.user .msgContent {
   color: #ff9900;
 }
 
-.message.assistant .msgContent {
+/* ── Markdown (assistant messages) ── */
+.msgContent--md {
+  display: block;
+  margin-top: 2px;
   color: #c8c8c8;
+  line-height: 1.65;
+}
+
+/* Strip excess margin from first/last child */
+.msgContent--md > :first-child { margin-top: 0; }
+.msgContent--md > :last-child  { margin-bottom: 0; }
+
+/* Paragraphs */
+.msgContent--md p {
+  margin: 6px 0;
+}
+
+/* Headers — terminal-accented */
+.msgContent--md h1,
+.msgContent--md h2,
+.msgContent--md h3,
+.msgContent--md h4 {
+  font-family: inherit;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin: 14px 0 6px;
+  padding-bottom: 4px;
+  line-height: 1.3;
+}
+
+.msgContent--md h1 {
+  font-size: 15px;
+  color: #ff6600;
+  border-bottom: 2px solid #ff6600;
+}
+
+.msgContent--md h2 {
+  font-size: 13px;
+  color: #ff9900;
+  border-bottom: 1px solid #333;
+}
+
+.msgContent--md h3 {
+  font-size: 12px;
+  color: #ffcc00;
+  border-bottom: none;
+}
+
+.msgContent--md h4 {
+  font-size: 12px;
+  color: #33ff33;
+  border-bottom: none;
+  letter-spacing: 1px;
+}
+
+/* Bold & italic */
+.msgContent--md strong {
+  color: #ff9900;
+  font-weight: 700;
+}
+
+.msgContent--md em {
+  color: #aaa;
+  font-style: normal;
+  letter-spacing: 0.3px;
+}
+
+/* Inline code */
+.msgContent--md code {
+  background: #1a1a1a;
+  color: #33ff33;
+  padding: 1px 5px;
+  border: 1px solid #2a2a2a;
+  font-size: 12px;
+}
+
+/* Code blocks */
+.msgContent--md pre {
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-left: 3px solid #ff6600;
+  padding: 10px 14px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.msgContent--md pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #33ff33;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Horizontal rules */
+.msgContent--md hr {
+  border: none;
+  border-top: 1px solid #333;
+  margin: 10px 0;
+}
+
+/* Unordered lists */
+.msgContent--md ul {
+  list-style: none;
+  padding-left: 14px;
+  margin: 6px 0;
+}
+
+.msgContent--md ul li::before {
+  content: "\25B6 ";
+  color: #ff6600;
+  font-size: 9px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+/* Ordered lists */
+.msgContent--md ol {
+  padding-left: 20px;
+  margin: 6px 0;
+  counter-reset: item;
+  list-style: none;
+}
+
+.msgContent--md ol li {
+  counter-increment: item;
+  position: relative;
+  padding-left: 4px;
+}
+
+.msgContent--md ol li::before {
+  content: counter(item) ".";
+  color: #ff6600;
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.msgContent--md li {
+  margin: 3px 0;
+  color: #c8c8c8;
+}
+
+/* Blockquotes */
+.msgContent--md blockquote {
+  border-left: 3px solid #ff6600;
+  margin: 8px 0;
+  padding: 4px 12px;
+  background: #111;
+  color: #888;
+  font-style: normal;
+}
+
+.msgContent--md blockquote p {
+  margin: 0;
+}
+
+/* ── Tables ── */
+.msgContent--md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12px;
+}
+
+.msgContent--md thead th {
+  background: #1a0d00;
+  color: #ff6600;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 6px 10px;
+  border: 1px solid #3a2000;
+  text-align: left;
+}
+
+.msgContent--md tbody tr {
+  border-bottom: 1px solid #1e1e1e;
+}
+
+.msgContent--md tbody tr:nth-child(even) {
+  background: #0f0f0f;
+}
+
+.msgContent--md tbody tr:hover {
+  background: #151500;
+}
+
+.msgContent--md tbody td {
+  padding: 5px 10px;
+  border: 1px solid #222;
+  color: #c8c8c8;
+  vertical-align: top;
+}
+
+/* Numeric cells right-aligned */
+.msgContent--md tbody td:not(:first-child) {
+  text-align: right;
+}
+
+/* ── Receipt tables (2-column Field | Details) ── */
+.msgContent--md table.table--receipt {
+  width: 100%;
+  max-width: 420px;
+  margin: 10px 0;
+  border-collapse: collapse;
+  border-left: 2px solid #ff6600;
+}
+
+.msgContent--md table.table--receipt thead th {
+  background: #141414;
+  color: #777;
+  border: 1px solid #2a2a2a;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.msgContent--md table.table--receipt tbody tr,
+.msgContent--md table.table--receipt tbody tr:nth-child(even),
+.msgContent--md table.table--receipt tbody tr:hover {
+  background: transparent;
+}
+
+.msgContent--md table.table--receipt tbody td {
+  border: none;
+  border-bottom: 1px solid #222;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.msgContent--md table.table--receipt tbody td:first-child {
+  width: 46%;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.msgContent--md table.table--receipt tbody td:last-child {
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.msgContent--md table.table--receipt tbody td strong {
+  color: #ff9900;
+}
+
+/* Links */
+.msgContent--md a {
+  color: #ff9900;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.msgContent--md a:hover {
+  color: #ff6600;
+}
+
+/* ── Live agent console (streaming tool/iteration trace) ── */
+.agentConsole {
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px solid #2a2a2a;
+  background: #0d0d0d;
+  border-left: 3px solid #ff6600;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #555;
+  white-space: pre-wrap;
+}
+
+.agentConsoleHeader {
+  color: #888;
+  font-weight: 700;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.agentConsoleLines {
+  display: grid;
+  gap: 2px;
+}
+
+.agentConsoleLine {
+  color: #666;
+}
+
+.cl-thinking {
+  color: #c38a34;
+  animation: consolePulse 1.2s ease-in-out infinite;
+}
+
+.cl-tool-running {
+  color: #ff9900;
+}
+
+.cl-tool-ok {
+  color: #33ff33;
+}
+
+.cl-tool-fail {
+  color: #ff3333;
+}
+
+.cl-tool-blocked {
+  color: #ff6600;
+}
+
+.cl-done {
+  color: #777;
+  margin-top: 2px;
+}
+
+.cl-metrics {
+  color: #666;
+  font-size: 0.9em;
+  margin-top: 1px;
+}
+
+@keyframes consolePulse {
+  0%,
+  100% { opacity: 0.75; }
+  50% { opacity: 1; }
 }
 
 .meta {
@@ -465,7 +991,7 @@ button {
 }
 
 /* ── Scanline overlay effect ── */
-.terminalPage .container::before {
+.terminalPage::before {
   content: "";
   position: fixed;
   top: 0;
@@ -487,4 +1013,18 @@ button {
 ::selection {
   background: #ff6600;
   color: #000;
+}
+
+/* ── Responsive: collapse to single column on small screens ── */
+@media (max-width: 900px) {
+  .splitLayout {
+    flex-direction: column;
+  }
+
+  .dashboardPanel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #333;
+    max-height: 50vh;
+  }
 }

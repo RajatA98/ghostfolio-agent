@@ -672,8 +672,6 @@ async function runEvalSet(): Promise<void> {
   const baseUrl = process.env.EVAL_BASE_URL;
   const jwt =
     process.env.EVAL_JWT ||
-    process.env.GHOSTFOLIO_JWT ||
-    process.env.GHOSTFOLIO_ACCESS_TOKEN ||
     '';
 
   if (!baseUrl) {
@@ -694,7 +692,7 @@ async function runEvalSet(): Promise<void> {
 
   if (!jwt) {
     console.warn(
-      '⚠  No EVAL_JWT or GHOSTFOLIO_JWT set; requests may get 401.\n'
+      '⚠  No EVAL_JWT set; requests may get 401.\n'
     );
   }
 

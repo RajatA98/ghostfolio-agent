@@ -9,55 +9,29 @@ datasource db {
 }
 
 model User {
-  id                      String    @id @default(uuid())
-  supabaseUserId          String    @unique
-  email                   String?
-  ghostfolioAccountId     String?   @unique
-  ghostfolioSecurityToken String?   // AES-256-GCM encrypted Ghostfolio security token
-  ghostfolioJwt           String?   // cached JWT — valid ~6 months
-  ghostfolioJwtExpiresAt  DateTime?
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  id             String   @id @default(uuid())
+  supabaseUserId String   @unique
+  email          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  plaidItems PlaidItem[]
-  orders     Order[]
+  brokerageConnections BrokerageConnection[]
 
   @@index([supabaseUserId])
 }
 
-model PlaidItem {
-  id                   String    @id @default(uuid())
-  userId               String
-  itemId               String    @unique
-  accessTokenEncrypted String    // AES-256-GCM encrypted
-  institutionId        String?
-  institutionName      String?
-  ghostfolioAccountId  String?   // Ghostfolio account for this brokerage
-  lastSyncedAt         DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+model BrokerageConnection {
+  id                  String    @id @default(uuid())
+  userId              String
+  snaptradeUserId     String
+  userSecretEncrypted String    // AES-256-GCM encrypted
+  institutionName     String?
+  lastSyncedAt        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id])
 
+  @@unique([userId, snaptradeUserId])
   @@index([userId])
-}
-
-model Order {
-  id                   String   @id @default(uuid())
-  userId               String
-  symbol               String
-  side                 String   // "BUY" | "SELL"
-  qty                  Decimal
-  unitPrice            Decimal
-  currency             String   @default("USD")
-  status               String   @default("pending") // "pending" | "logged" | "failed"
-  ghostfolioActivityId String?
-  errorMessage         String?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@index([status])
 }
