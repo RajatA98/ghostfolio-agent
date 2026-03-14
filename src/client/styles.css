@@ -275,6 +275,9 @@ body {
 }
 
 .dashboardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 16px;
   font-size: 12px;
   color: #ff6600;
@@ -286,6 +289,31 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+/* ── Privacy toggle ── */
+.privacyToggle {
+  border: 1px solid #555;
+  background: transparent;
+  color: #888;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+
+.privacyToggle:hover {
+  border-color: #ff6600;
+  color: #ff6600;
+}
+
+.privacyToggle.active {
+  border-color: #ff6600;
+  background: #ff6600;
+  color: #000;
 }
 
 .dashboardCard {
@@ -343,6 +371,45 @@ body {
 
 .legendPct {
   color: #666;
+}
+
+/* ── Period selector ── */
+.periodSelector {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 8px;
+}
+
+.periodBtn {
+  border: 1px solid #333;
+  background: transparent;
+  color: #666;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+
+.periodBtn:hover {
+  border-color: #ff6600;
+  color: #ff6600;
+}
+
+.periodBtn.active {
+  border-color: #ff6600;
+  background: #ff6600;
+  color: #000;
+}
+
+/* ── History chart ── */
+#historyChart {
+  display: block;
+  width: 100%;
+  height: 160px;
 }
 
 /* ── Performance ── */

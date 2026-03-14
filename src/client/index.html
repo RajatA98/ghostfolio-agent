@@ -82,7 +82,10 @@
 
         <!-- RIGHT: Portfolio Dashboard -->
         <aside id="dashboardPanel" class="dashboardPanel" style="display:none">
-          <div class="dashboardHeader">PORTFOLIO OVERVIEW</div>
+          <div class="dashboardHeader">
+            <span>PORTFOLIO OVERVIEW</span>
+            <button id="privacyToggle" type="button" class="privacyToggle" title="Toggle dollar amounts">[$]</button>
+          </div>
 
           <div class="dashboardCard">
             <div class="cardLabel">TOTAL VALUE</div>
@@ -99,6 +102,15 @@
             <div class="cardLabel">PERFORMANCE</div>
             <div id="performanceValue" class="performanceValue">--</div>
             <div id="performanceLabel" class="performanceLabel"></div>
+            <div class="periodSelector" id="periodSelector">
+              <button class="periodBtn active" data-range="1mo">1M</button>
+              <button class="periodBtn" data-range="3mo">3M</button>
+              <button class="periodBtn" data-range="6mo">6M</button>
+              <button class="periodBtn" data-range="1y">1Y</button>
+              <button class="periodBtn" data-range="max">ALL</button>
+            </div>
+            <canvas id="historyChart" width="320" height="160"></canvas>
+            <canvas id="performanceChart" width="320" height="160" style="margin-top:8px"></canvas>
           </div>
 
           <div class="dashboardCard">

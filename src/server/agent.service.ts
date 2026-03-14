@@ -630,6 +630,11 @@ export class AgentService {
     const lowerMessage = message.toLowerCase();
     let finalAnswer = answer.trim();
 
+    // Strip raw JSON code blocks — the frontend renders markdown, not JSON
+    finalAnswer = finalAnswer.replace(/```json\s*\n[\s\S]*?\n```/g, '').trim();
+    // Also strip orphan JSON objects that look like structured data dumps
+    finalAnswer = finalAnswer.replace(/\n\{[\s\n]*"valuationMethod"[\s\S]*?\n\}/g, '').trim();
+
     if (!finalAnswer) {
       const simulate = toolResults.get('simulateAllocationChange') as
         | { notes?: string[] }

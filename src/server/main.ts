@@ -130,45 +130,69 @@ if (agentConfig.enableSnapTrade) {
   app.post('/api/snaptrade/register', async (req, res) => {
     try {
       const authReq = req as AuthenticatedRequest;
-      console.log('[snaptrade/register] userId:', authReq.userId, 'supabaseUserId:', authReq.supabaseUserId);
       const result = await snapTradeService.registerUser(authReq.userId!, authReq.supabaseUserId!);
       res.json({ snaptradeUserId: result.snaptradeUserId });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      // Log full error for debugging
-      console.error('[snaptrade/register] error:', error);
-      // Try to extract SnapTrade API error body
-      const apiBody = (error as { body?: unknown })?.body ?? (error as { response?: { data?: unknown } })?.response?.data;
+      console.error('[snaptrade/register] error:', SnapTradeService.sanitizeError(error));
       res.status(500).json({
-        error: apiBody ? JSON.stringify(apiBody) : msg
+        error: SnapTradeService.sanitizeError(error)
       });
     }
   });
 
   app.get('/api/snaptrade/connect-url', async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const protocol = req.headers['x-forwarded-proto'] ?? req.protocol;
+    const host = req.headers['x-forwarded-host'] ?? req.get('host');
+    const callbackUrl = `${protocol}://${host}/snaptrade/callback`;
+
     try {
-      const authReq = req as AuthenticatedRequest;
-      const protocol = req.headers['x-forwarded-proto'] ?? req.protocol;
-      const host = req.headers['x-forwarded-host'] ?? req.get('host');
-      const callbackUrl = `${protocol}://${host}/snaptrade/callback`;
       const result = await snapTradeService.getConnectUrl(authReq.userId!, authReq.supabaseUserId!, callbackUrl);
       res.json(result);
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : String(error)
-      });
+      const is401 = String(error).includes('401');
+      if (!is401) {
+        res.status(500).json({ error: SnapTradeService.sanitizeError(error) });
+        return;
+      }
+      // 401 = stale credentials. Refresh and retry.
+      console.log('[snaptrade/connect-url] 401 detected, refreshing credentials...');
+      try {
+        await snapTradeService.refreshCredentials(authReq.userId!, authReq.supabaseUserId!);
+        const result = await snapTradeService.getConnectUrl(authReq.userId!, authReq.supabaseUserId!, callbackUrl);
+        res.json(result);
+      } catch (retryError) {
+        // Refresh also failed — delete stale record so next register starts fresh
+        console.error('[snaptrade/connect-url] refresh failed:', SnapTradeService.sanitizeError(retryError));
+        await snapTradeService.deleteConnection(authReq.userId!).catch(() => {});
+        res.status(500).json({
+          error: 'Brokerage credentials expired. Please click Connect Brokerage again.'
+        });
+      }
     }
   });
 
   app.get('/api/snaptrade/connections', async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
     try {
-      const authReq = req as AuthenticatedRequest;
       const connections = await snapTradeService.listConnections(authReq.userId!, authReq.supabaseUserId!);
       res.json({ connections });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : String(error)
-      });
+      const is401 = String(error).includes('401');
+      if (!is401) {
+        res.status(500).json({ error: SnapTradeService.sanitizeError(error) });
+        return;
+      }
+      // 401 = stale. Refresh and retry.
+      try {
+        await snapTradeService.refreshCredentials(authReq.userId!, authReq.supabaseUserId!);
+        const connections = await snapTradeService.listConnections(authReq.userId!, authReq.supabaseUserId!);
+        res.json({ connections });
+      } catch {
+        // Stale beyond repair — return empty so UI shows "NO BROKERAGE"
+        await snapTradeService.deleteConnection(authReq.userId!).catch(() => {});
+        res.json({ connections: [] });
+      }
     }
   });
 
@@ -178,9 +202,7 @@ if (agentConfig.enableSnapTrade) {
       const accounts = await snapTradeService.listAccounts(authReq.userId!, authReq.supabaseUserId!);
       res.json({ accounts });
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : String(error)
-      });
+      res.status(500).json({ error: SnapTradeService.sanitizeError(error) });
     }
   });
 
@@ -190,9 +212,40 @@ if (agentConfig.enableSnapTrade) {
       const result = await snapTradeService.getHoldings(authReq.userId!, authReq.supabaseUserId!);
       res.json(result);
     } catch (error) {
-      res.status(500).json({
-        error: error instanceof Error ? error.message : String(error)
-      });
+      res.status(500).json({ error: SnapTradeService.sanitizeError(error) });
+    }
+  });
+  // --- Portfolio performance history (from SnapTrade) ---
+  app.get('/api/snaptrade/history', async (req, res) => {
+    const authReq = req as AuthenticatedRequest;
+    const range = (req.query.range as string) || '1mo';
+
+    // Convert range to startDate/endDate
+    const endDate = new Date();
+    const startDate = new Date();
+    switch (range) {
+      case '1mo': startDate.setMonth(startDate.getMonth() - 1); break;
+      case '3mo': startDate.setMonth(startDate.getMonth() - 3); break;
+      case '6mo': startDate.setMonth(startDate.getMonth() - 6); break;
+      case '1y': startDate.setFullYear(startDate.getFullYear() - 1); break;
+      case 'max': startDate.setFullYear(startDate.getFullYear() - 10); break;
+      default: startDate.setMonth(startDate.getMonth() - 1);
+    }
+
+    const frequency = range === '1mo' ? 'daily' : range === '3mo' ? 'daily' : 'weekly';
+
+    try {
+      const history = await snapTradeService.getPerformanceHistory(
+        authReq.userId!,
+        authReq.supabaseUserId!,
+        startDate.toISOString().split('T')[0],
+        endDate.toISOString().split('T')[0],
+        frequency
+      );
+      res.json({ history });
+    } catch (error) {
+      console.error('[snaptrade/history] error:', SnapTradeService.sanitizeError(error));
+      res.status(500).json({ error: SnapTradeService.sanitizeError(error) });
     }
   });
 }

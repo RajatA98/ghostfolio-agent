@@ -35,6 +35,58 @@ export function toYahooSymbol(symbol: string): string {
  * fingerprinting differences. curl with a browser User-Agent works reliably.
  * Results are cached for 1 minute to minimize requests during eval runs.
  */
+/**
+ * Fetch historical daily close prices from Yahoo Finance.
+ * Returns array of { date: "YYYY-MM-DD", close: number }.
+ */
+export function fetchYahooHistory(
+  yahooSymbol: string,
+  range: '1mo' | '3mo' | '6mo' | '1y' | '5y' | 'max' = '3mo'
+): Array<{ date: string; close: number }> {
+  try {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1d&range=${range}`;
+    const raw = execSync(
+      `/usr/bin/curl -s -H "User-Agent: ${USER_AGENT}" "${url}"`,
+      { timeout: 15_000, encoding: 'utf-8', env: { PATH: '/usr/bin', HOME: '' } }
+    );
+
+    const data = JSON.parse(raw) as {
+      chart?: {
+        result?: Array<{
+          timestamp?: number[];
+          indicators?: {
+            adjclose?: Array<{ adjclose?: number[] }>;
+            quote?: Array<{ close?: number[] }>;
+          };
+        }>;
+      };
+    };
+
+    const result = data.chart?.result?.[0];
+    if (!result?.timestamp) return [];
+
+    const timestamps = result.timestamp;
+    const closes =
+      result.indicators?.adjclose?.[0]?.adjclose ??
+      result.indicators?.quote?.[0]?.close ??
+      [];
+
+    const points: Array<{ date: string; close: number }> = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const close = closes[i];
+      if (close == null || close <= 0) continue;
+      const d = new Date(timestamps[i] * 1000);
+      points.push({
+        date: d.toISOString().split('T')[0],
+        close
+      });
+    }
+    return points;
+  } catch {
+    return [];
+  }
+}
+
 export function fetchYahooQuote(
   yahooSymbol: string
 ): { price: number; currency: string } | null {

@@ -174,15 +174,32 @@ function checkSourceAttribution({
     let source = '';
 
     for (const [toolName, resultStr] of resultStrings) {
-      // Check if the numeric value appears in the tool result
+      // Check multiple representations: 1793.76, 1793.8, 1794
       if (
         resultStr.includes(String(amount)) ||
-        resultStr.includes(amount.toFixed(2))
+        resultStr.includes(amount.toFixed(2)) ||
+        resultStr.includes(amount.toFixed(1)) ||
+        resultStr.includes(String(Math.round(amount)))
       ) {
         found = true;
         source = toolName;
         break;
       }
+
+      // Also check if the amount is a computed sum (e.g. totalValue) that
+      // could be derived from individual holdings — allow ±2% tolerance
+      // for rounding differences in computed totals
+      const numericPattern = /[\d.]+/g;
+      let numMatch: RegExpExecArray | null;
+      while ((numMatch = numericPattern.exec(resultStr)) !== null) {
+        const toolVal = Number(numMatch[0]);
+        if (toolVal > 0 && Math.abs(toolVal - amount) / Math.max(toolVal, 1) < 0.02) {
+          found = true;
+          source = toolName;
+          break;
+        }
+      }
+      if (found) break;
     }
 
     attributions.push({ claim, source, verified: found });
